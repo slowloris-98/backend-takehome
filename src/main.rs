@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get,post},
+    routing::{get, post},
     Router,
 };
 
@@ -7,9 +7,11 @@ pub mod routes;
 
 #[tokio::main]
 async fn main() {
-
     let app = Router::new()
-        .route("/api/jamf/credentials", post(routes::credentials::post_credentials))
+        .route(
+            "/api/jamf/credentials",
+            post(routes::credentials::post_credentials),
+        )
         .route("/api/jamf/devices", get(routes::devices::get_devices));
 
     // run it with hyper on localhost:3000

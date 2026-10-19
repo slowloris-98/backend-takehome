@@ -1,19 +1,71 @@
 # backend-takehome
 
-Install rust: https://www.rust-lang.org/learn/get-started
+A Jamf integration backend built with Axum.
 
-To run the project, after installing rust, run 
+## Run
 
-`$ cargo run`
+Install Rust: https://www.rust-lang.org/learn/get-started
 
-In same directory as the readme. 
+Then, in the same directory as this README:
 
-To verify the project is working, once it's running, you should be able to
+```bash
+cargo run
+```
 
-`$ curl http://localhost:3000` and see `{"data":"hello world"}`
+The server listens on `0.0.0.0:3000`.
 
-Useful references:
-Axum documentation: https://docs.rs/axum/latest/axum/all.html#
-Serde documentation: https://serde.rs/
-Env vars in rust (please do not commmit environment variables to github): https://doc.rust-lang.org/book/ch12-05-working-with-environment-variables.html
+> Both handlers are currently stubs: `credentials` echoes back whatever you send, and
+> `devices` returns placeholder data.
 
+## Routes
+
+### `GET /api/jamf/devices`
+
+Returns the list of devices.
+
+```bash
+curl http://localhost:3000/api/jamf/devices
+```
+
+```json
+{"devices":["device 1","device 2"]}
+```
+
+### `POST /api/jamf/credentials`
+
+Accepts Jamf credentials as JSON and returns them back.
+
+Request body:
+
+```json
+{
+  "username": "jamf-admin",
+  "password": "example-password",
+  "url": "https://yourorg.jamfcloud.com"
+}
+```
+
+bash / curl:
+
+```bash
+curl -X POST http://localhost:3000/api/jamf/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"username":"jamf-admin","password":"example-password","url":"https://yourorg.jamfcloud.com"}'
+```
+
+PowerShell (Windows) — `curl` there is an alias for `Invoke-WebRequest`, so the flags
+above do not apply:
+
+```powershell
+Invoke-RestMethod -Uri http://localhost:3000/api/jamf/credentials `
+  -Method Post -ContentType "application/json" `
+  -Body '{"username":"jamf-admin","password":"example-password","url":"https://yourorg.jamfcloud.com"}'
+```
+
+Response:
+
+```json
+{"username":"jamf-admin","password":"example-password","url":"https://yourorg.jamfcloud.com"}
+```
+
+Credentials belong in `.env` (gitignored) — never commit them.
