@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A Jamf integration backend built as a take-home exercise. The crate is named `backend-takehome`; the repo directory is `jamf_integration`. Two routes are wired up, but both handlers are still stubs — the real Jamf integration is yet to be built:
+A Jamf integration backend built as a take-home exercise. The crate, repo, and directory are all named `backend-takehome`. Two routes are wired up, but both handlers are still stubs — the real Jamf integration is yet to be built:
 
 - `POST /api/jamf/credentials` — mirrors the posted `{username, password, url}` back.
 - `GET /api/jamf/devices` — returns `{"devices": [...]}`, where each `Device` is `{device_id, name, model, os, os_is_latest}`, from a hardcoded sample list. TODO: integrate the Jamf APIs, and compute `os_is_latest` with the `version-compare` crate rather than hardcoding it.
