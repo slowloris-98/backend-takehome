@@ -2,10 +2,12 @@
 
 .env
 .env.*
+!.env.example
 
 
 .claude/
 
 /notes.txt
+/decisions.txt
 
 /test_json/

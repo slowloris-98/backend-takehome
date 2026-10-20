@@ -17,7 +17,7 @@ pub struct CredentialsRequest {
 
 pub async fn post_credentials(
     Json(credentials): Json<CredentialsRequest>,
-) -> Json<CredentialsResponse> {    
+) -> Json<CredentialsResponse> {
     // mirrors user input values for now
     Json(CredentialsResponse {
         username: credentials.username,

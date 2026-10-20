@@ -22,3 +22,6 @@ chrono = "0.4"
 version-compare = "0.1.1"
 tower-http = { version = "0.4", features = ["cors"] }
 http = "0.2"
+
+# .env loading (populates the process env; see JamfClient::from_env)
+dotenv = "0.15"

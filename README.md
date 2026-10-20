@@ -6,7 +6,17 @@ A Jamf integration backend built with Axum.
 
 Install Rust: https://www.rust-lang.org/learn/get-started
 
-Then, in the same directory as this README:
+Then, in the same directory as this README, copy the example config and fill in your
+Jamf Pro credentials:
+
+```bash
+cp .env.example .env
+```
+
+`.env` needs `JAMF_BASE_URL`, `JAMF_USERNAME` and `JAMF_PASSWORD`; the account needs the
+"Read Computers" privilege. `.env` is gitignored and is loaded automatically at startup,
+so no exporting is needed. Real environment variables override it, which is how you would
+supply these in a container or CI.
 
 ```bash
 cargo run
@@ -14,8 +24,9 @@ cargo run
 
 The server listens on `0.0.0.0:3000`.
 
-> Both handlers are currently stubs: `credentials` mirrors back whatever you send, and
-> `devices` returns hardcoded sample devices.
+> `GET /api/jamf/devices` calls the live Jamf Pro API and needs `.env` configured; it
+> returns `502` with `missing env var JAMF_BASE_URL` if it is not. `POST` to
+> `/api/jamf/credentials` is still a stub that mirrors back whatever you send.
 
 ## Routes
 
