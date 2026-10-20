@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Jamf integration backend built as a take-home exercise. The crate is named `backend-takehome`; the repo directory is `jamf_integration`. Two routes are wired up, but both handlers are still stubs — the real Jamf integration is yet to be built:
 
-- `POST /api/jamf/credentials` — echoes the posted `{username, password, url}` back. TODO: read the real credentials from the environment instead.
-- `GET /api/jamf/devices` — returns placeholder `{"devices":["device 1","device 2"]}`. TODO: fetch device details from the Jamf APIs.
+- `POST /api/jamf/credentials` — mirrors the posted `{username, password, url}` back.
+- `GET /api/jamf/devices` — returns `{"devices": [...]}`, where each `Device` is `{device_id, name, model, os, os_is_latest}`, from a hardcoded sample list. TODO: integrate the Jamf APIs, and compute `os_is_latest` with the `version-compare` crate rather than hardcoding it.
 
 [README.md](README.md) documents both routes with sample bash and PowerShell requests; keep it in sync when routes change.
 
@@ -32,7 +32,7 @@ There are no tests yet, so `cargo test` currently compiles and reports zero test
 
 - [src/main.rs](src/main.rs) — binary entry point. Declares `pub mod routes`, builds the `Router`, binds hyper to `0.0.0.0:3000`. Every new route must be registered on the `Router` here.
 - [src/routes/](src/routes/) — one file per handler group. [src/routes/mod.rs](src/routes/mod.rs) is a plain re-export list (`pub mod credentials;`, `pub mod devices;`) and must be updated when adding a route file.
-- [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: a `#[derive(Serialize)]` response struct plus an `async fn` handler returning `Json<T>`.
+- [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: `#[derive(Serialize)]` structs plus an `async fn` handler returning `Json<T>`. Nested payloads get their own struct (`Device`) held by the response struct (`DevicesResponse`) rather than inline `serde_json::json!`; field names are snake_case and serialized as-is.
 - [src/routes/credentials.rs](src/routes/credentials.rs) — the pattern for a POST: a separate `#[derive(Deserialize)]` request struct extracted via `Json(body): Json<Req>`, returning `Json<Res>`.
 
 Each handler returns its own top-level struct (e.g. `{"devices":[...]}`); responses are not wrapped in a shared `data` envelope.

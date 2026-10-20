@@ -17,8 +17,8 @@ pub struct CredentialsRequest {
 
 pub async fn post_credentials(
     Json(credentials): Json<CredentialsRequest>,
-) -> Json<CredentialsResponse> {
-    // TODO: read the actual credentials from env file and return
+) -> Json<CredentialsResponse> {    
+    // mirrors user input values for now
     Json(CredentialsResponse {
         username: credentials.username,
         password: credentials.password,

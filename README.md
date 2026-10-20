@@ -14,22 +14,47 @@ cargo run
 
 The server listens on `0.0.0.0:3000`.
 
-> Both handlers are currently stubs: `credentials` echoes back whatever you send, and
-> `devices` returns placeholder data.
+> Both handlers are currently stubs: `credentials` mirrors back whatever you send, and
+> `devices` returns hardcoded sample devices.
 
 ## Routes
 
 ### `GET /api/jamf/devices`
 
-Returns the list of devices.
+Returns the list of devices, each with its OS and whether that OS is the latest version.
 
 ```bash
 curl http://localhost:3000/api/jamf/devices
 ```
 
 ```json
-{"devices":["device 1","device 2"]}
+{
+  "devices": [
+    {
+      "device_id": "101",
+      "name": "Engineering MacBook",
+      "model": "MacBook Pro 14-inch",
+      "os": "macOS 15.7",
+      "os_is_latest": true
+    },
+    {
+      "device_id": "102",
+      "name": "Design MacBook",
+      "model": "MacBook Air 13-inch",
+      "os": "macOS 14.6",
+      "os_is_latest": false
+    }
+  ]
+}
 ```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `device_id` | string | Jamf device identifier |
+| `name` | string | Device display name |
+| `model` | string | Hardware model |
+| `os` | string | Current OS version |
+| `os_is_latest` | bool | Whether `os` is the newest available version |
 
 ### `POST /api/jamf/credentials`
 
