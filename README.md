@@ -32,7 +32,8 @@ The server listens on `0.0.0.0:3000`.
 
 ### `GET /api/jamf/devices`
 
-Returns the list of devices, each with its OS and whether that OS is the latest version.
+Returns every computer in the Jamf inventory, each with its OS and whether that OS is the
+latest version Jamf lists for it. Devices are sorted by `name` ascending.
 
 ```bash
 curl http://localhost:3000/api/jamf/devices
@@ -43,17 +44,17 @@ curl http://localhost:3000/api/jamf/devices
   "devices": [
     {
       "device_id": "101",
-      "name": "Engineering MacBook",
-      "model": "MacBook Pro 14-inch",
-      "os": "macOS 15.7",
-      "os_is_latest": true
+      "name": "Design MacBook",
+      "model": "MacBook Air (13-inch, M2, 2022)",
+      "os": "macOS 14.6",
+      "os_is_latest": false
     },
     {
       "device_id": "102",
-      "name": "Design MacBook",
-      "model": "MacBook Air 13-inch",
-      "os": "macOS 14.6",
-      "os_is_latest": false
+      "name": "Engineering MacBook",
+      "model": "MacBook Pro (14-inch, M3 Pro, 2023)",
+      "os": "macOS 15.3.1",
+      "os_is_latest": true
     }
   ]
 }
@@ -64,8 +65,19 @@ curl http://localhost:3000/api/jamf/devices
 | `device_id` | string | Jamf device identifier |
 | `name` | string | Device display name |
 | `model` | string | Hardware model |
-| `os` | string | Current OS version |
-| `os_is_latest` | bool | Whether `os` is the newest available version |
+| `os` | string | Current OS name and version, e.g. `macOS 15.3.1` |
+| `os_is_latest` | bool | Whether `os` is at least the newest version Jamf lists for it |
+
+`os_is_latest` is `false` when the version cannot be compared — an OS Jamf lists no updates
+for, or a version string that does not parse — rather than erroring. Fields Jamf leaves out
+come back as empty strings.
+
+Any failure reaching Jamf (missing config, rejected credentials, an API error) returns `502`
+with the underlying message as the body:
+
+```
+missing env var JAMF_BASE_URL
+```
 
 ### `POST /api/jamf/credentials`
 
