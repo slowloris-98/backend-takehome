@@ -93,9 +93,12 @@ computers are the core deliverable but plan to include later.
   string is already self-describing for a display field, whereas a bare `false` was not.
 - **Ordering is not a guarantee.** Sorting was never a stated requirement of the
   assessment, so the endpoint imposes no collation of its own -- it just passes
-  through Jamf's `sort=general.name:asc`, which is case-insensitive. The earlier
-  byte-wise re-sort in Rust was an artifact of the concurrent fan-out needing to undo
-  its own out-of-order completion, not a deliberate contract.
+  through Jamf's `sort=id:asc`. The earlier byte-wise re-sort in Rust was an artifact
+  of the concurrent fan-out needing to undo its own out-of-order completion, not a
+  deliberate contract.
+- **Pagination sorts by `id`.** `general.name` is mutable, so a rename mid-pass can shift a
+  device across an offset page boundary and drop or duplicate it, whereas `id` is immutable
+  -- and since response ordering was never a requirement, the order just follows `id`.
 - **Layering.** Routes own HTTP shape, `services` owns Jamf access. Every section of
   `Computer` is `Option` because a list view returns only `general`, which lets one
   type serve both the list and multi-section responses.

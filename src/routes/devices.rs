@@ -57,6 +57,7 @@ async fn collect_devices() -> Result<DevicesResponse, String> {
         })
         .collect();
 
-    // No re-sort: we asked Jamf for general.name:asc and nothing reorders it here.
+    // No re-sort: we asked Jamf for id:asc -- an immutable key, so the paginated pass
+    // cannot skip or duplicate a device -- and nothing reorders it here.
     Ok(DevicesResponse { devices })
 }

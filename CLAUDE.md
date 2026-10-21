@@ -41,7 +41,7 @@ Routes own HTTP shape; `services` owns everything that talks to Jamf. A handler 
 - [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: `#[derive(Serialize)]` response structs plus an `async fn` handler returning `Result<Json<T>, (StatusCode, String)>`. Nested payloads get their own struct (`Device`) held by the response struct (`DevicesResponse`) rather than inline `serde_json::json!`; field names are snake_case and serialized as-is. The handler is a thin wrapper that maps a `collect_devices()` error to `502`; the orchestration lives in that private fn.
 - [src/routes/credentials.rs](src/routes/credentials.rs) — the pattern for a POST: a separate `#[derive(Deserialize)]` request struct extracted via `Json(body): Json<Req>`, returning `Json<Res>`.
 - [src/services/](src/services/) — Jamf API access. [src/services/mod.rs](src/services/mod.rs) is a re-export list like the routes one.
-- [src/services/jamf.rs](src/services/jamf.rs) — `JamfClient` (constructed by `from_env()`, which trades basic auth for a bearer token) with one method per endpoint: `inventory_full()` (paginated, `page-size` 100, sorted `general.name:asc`) and `available_updates()`. All of them go through a private generic `get<T>()`. Deserialization structs mirror Jamf's camelCase via `#[serde(rename)]`, and every section of `Computer` is `Option` because the list view returns only `general`. Also holds the free function `is_latest()` and its unit tests.
+- [src/services/jamf.rs](src/services/jamf.rs) — `JamfClient` (constructed by `from_env()`, which trades basic auth for a bearer token) with one method per endpoint: `inventory_full()` (paginated, `page-size` 100, sorted `id:asc`) and `available_updates()`. All of them go through a private generic `get<T>()`. Deserialization structs mirror Jamf's camelCase via `#[serde(rename)]`, and every section of `Computer` is `Option` because the list view returns only `general`. Also holds the free function `is_latest()` and its unit tests.
 
 `inventory_full()` delegates to the private `inventory_sections(&[&str])`, which builds the
 repeated `section=` params and runs the shared pagination loop — add a section by passing it,
@@ -52,7 +52,8 @@ still `Option` so the one type can serve both list and multi-section responses.
 Shape of `GET /api/jamf/devices`: the update catalog and `inventory_full()` go out
 concurrently via `tokio::try_join!`, then a plain `map` builds each `Device`. That is the
 only concurrency — no `Arc`, no `JoinSet`, and no final sort, because nothing fans out or
-reorders. Jamf's `general.name:asc` ordering (case-insensitive) survives to the response.
+reorders. Jamf's `id:asc` ordering survives to the response -- `id` is the sort key because
+it is immutable, so an offset page window cannot skip or duplicate a device renamed mid-pass.
 
 Each handler returns its own top-level struct (e.g. `{"devices":[...]}`); responses are not wrapped in a shared `data` envelope.
 

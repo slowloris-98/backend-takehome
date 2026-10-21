@@ -33,7 +33,7 @@ The server listens on `0.0.0.0:3000`.
 ### `GET /api/jamf/devices`
 
 Returns every computer in the Jamf inventory, each with its OS and whether that OS is the
-latest version Jamf lists for it. Devices are sorted by `name` ascending.
+latest version Jamf lists for it. Devices are sorted by `device_id` ascending.
 
 ```bash
 curl http://localhost:3000/api/jamf/devices
@@ -80,8 +80,11 @@ curl http://localhost:3000/api/jamf/devices
 every device with no per-device follow-up requests: `1 auth + 1 catalog + ceil(N/100) list`
 for N devices.
 
-Devices come back in the `sort=general.name:asc` order Jamf applies, which is
-case-insensitive. The endpoint does not impose a collation of its own.
+Devices come back in the `sort=id:asc` order Jamf applies. `id` is the sort key because
+Jamf pages by offset, so the key has to be stable for the whole pass: a device renamed
+between two page requests would move within a `general.name` ordering and be skipped or
+returned twice. The endpoint imposes no collation of its own, so that id order simply
+reaches the response.
 
 `os_is_latest` is `true` or `false` when the comparison succeeds, and `null` when it cannot
 be made at all — the device reported no OS, the OS is absent from Jamf's update catalog, or
@@ -152,7 +155,7 @@ The tests in [tests/devices.rs](tests/devices.rs) hit a **running** server and r
 data, so start `cargo run` in another terminal with a valid `.env` first. With nothing
 listening on port 3000 they print a skip notice and pass, so read the output rather than
 trusting the exit code alone. They assert only the response shape — status, the five
-fields and their types (`os_is_latest` being bool or `null`), and the name ordering —
+fields and their types (`os_is_latest` being bool or `null`), and the `device_id` ordering —
 never specific device names, so they survive inventory changes.
 
 On Windows a server started with `cargo run` holds a lock on

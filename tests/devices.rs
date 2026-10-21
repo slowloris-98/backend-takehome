@@ -64,14 +64,22 @@ async fn devices_returns_well_formed_payload() {
         );
     }
 
-    // Jamf's sort=general.name:asc is case-insensitive; nothing re-sorts in Rust.
-    let names: Vec<String> = devices
+    // We paginate with sort=id:asc for a stable page window, and nothing re-sorts in
+    // Rust, so that order reaches the response. Jamf sorts `id` numerically, so parse
+    // before comparing -- a lexical check would fail on "10" < "9".
+    let ids: Vec<u64> = devices
         .iter()
-        .map(|device| device["name"].as_str().unwrap().to_lowercase())
+        .map(|device| {
+            device["device_id"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .expect("device_id was not numeric")
+        })
         .collect();
     assert!(
-        names.windows(2).all(|pair| pair[0] <= pair[1]),
-        "devices were not sorted by name: {names:?}"
+        ids.windows(2).all(|pair| pair[0] <= pair[1]),
+        "devices were not sorted by device_id: {ids:?}"
     );
 }
 

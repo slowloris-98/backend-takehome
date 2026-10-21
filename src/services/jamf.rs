@@ -107,6 +107,11 @@ impl JamfClient {
     /// covered. Jamf accepts `section` repeated, which is what lets `inventory_full`
     /// fetch everything the device payload needs without per-computer detail calls.
     /// Add a section by passing it here, not by copying the pagination loop.
+    ///
+    /// Sorted by `id` because Jamf pages by offset, so the sort key has to be stable
+    /// for the whole pass: `general.name` is mutable, and a device renamed between two
+    /// page requests moves within the ordering and gets skipped or returned twice.
+    /// `id` is immutable, so the page window cannot shift under us.
     async fn inventory_sections(&self, sections: &[&str]) -> Result<Vec<Computer>, Error> {
         let sections: String = sections
             .iter()
@@ -116,7 +121,7 @@ impl JamfClient {
         for page in 0.. {
             let page: InventoryPage = self
                 .get(&format!(
-                    "/v4/computers-inventory?{sections}page={page}&page-size={PAGE_SIZE}&sort=general.name%3Aasc"
+                    "/v4/computers-inventory?{sections}page={page}&page-size={PAGE_SIZE}&sort=id%3Aasc"
                 ))
                 .await?;
             let exhausted = page.results.is_empty();
