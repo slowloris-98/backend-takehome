@@ -103,13 +103,19 @@ impl JamfClient {
             .map_err(|e| format!("GET {path} response invalid: {e}"))
     }
 
-    /// Every computer, following pages until `totalCount` is covered.
-    pub async fn inventory(&self) -> Result<Vec<Computer>, Error> {
+    /// Every computer carrying `sections`, following pages until `totalCount` is
+    /// covered. Jamf accepts `section` repeated, so asking for more sections here
+    /// is what lets `inventory_full` skip the per-computer detail calls.
+    async fn inventory_sections(&self, sections: &[&str]) -> Result<Vec<Computer>, Error> {
+        let sections: String = sections
+            .iter()
+            .map(|section| format!("section={section}&"))
+            .collect();
         let mut all: Vec<Computer> = Vec::new();
         for page in 0.. {
             let page: InventoryPage = self
                 .get(&format!(
-                    "/v4/computers-inventory?section=GENERAL&page={page}&page-size={PAGE_SIZE}&sort=general.name%3Aasc"
+                    "/v4/computers-inventory?{sections}page={page}&page-size={PAGE_SIZE}&sort=general.name%3Aasc"
                 ))
                 .await?;
             let exhausted = page.results.is_empty();
@@ -119,6 +125,18 @@ impl JamfClient {
             }
         }
         Ok(all)
+    }
+
+    /// Every computer, `general` only -- `model` and the OS version need `detail`.
+    pub async fn inventory(&self) -> Result<Vec<Computer>, Error> {
+        self.inventory_sections(&["GENERAL"]).await
+    }
+
+    /// Every computer with every section the device payload needs, in one paginated
+    /// pass -- no per-computer detail calls.
+    pub async fn inventory_full(&self) -> Result<Vec<Computer>, Error> {
+        self.inventory_sections(&["GENERAL", "HARDWARE", "OPERATING_SYSTEM"])
+            .await
     }
 
     /// All sections for one computer -- the only source of `model` and OS version.

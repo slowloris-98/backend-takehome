@@ -77,3 +77,47 @@ async fn collect_devices() -> Result<DevicesResponse, String> {
     devices.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(DevicesResponse { devices })
 }
+
+/// The one-shot arm: `/v2/api/jamf/devices`. Same payload as `get_devices`,
+/// sourced from a single multi-section inventory call instead of a detail fan-out.
+pub async fn get_devices_one_shot() -> Result<Json<DevicesResponse>, (StatusCode, String)> {
+    collect_devices_one_shot()
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e))
+}
+
+async fn collect_devices_one_shot() -> Result<DevicesResponse, String> {
+    let client = JamfClient::from_env().await?;
+
+    // Still independent, so still concurrent -- but that is the only concurrency
+    // left: no Arc and no JoinSet, because nothing is shared across tasks.
+    let (updates, computers) =
+        tokio::try_join!(client.available_updates(), client.inventory_full())?;
+
+    let devices = computers
+        .into_iter()
+        .map(|computer| {
+            let (os_name, os_version) = computer
+                .operating_system
+                .map(|os| (os.name.unwrap_or_default(), os.version.unwrap_or_default()))
+                .unwrap_or_default();
+            Device {
+                os_is_latest: is_latest(&updates, &os_name, &os_version),
+                device_id: computer.id,
+                name: computer
+                    .general
+                    .and_then(|general| general.name)
+                    .unwrap_or_default(),
+                model: computer
+                    .hardware
+                    .and_then(|hardware| hardware.model)
+                    .unwrap_or_default(),
+                os: format!("{os_name} {os_version}").trim().to_string(),
+            }
+        })
+        .collect();
+
+    // No re-sort: we asked Jamf for general.name:asc and nothing reorders it here.
+    Ok(DevicesResponse { devices })
+}
