@@ -104,8 +104,9 @@ impl JamfClient {
     }
 
     /// Every computer carrying `sections`, following pages until `totalCount` is
-    /// covered. Jamf accepts `section` repeated, so asking for more sections here
-    /// is what lets `inventory_full` skip the per-computer detail calls.
+    /// covered. Jamf accepts `section` repeated, which is what lets `inventory_full`
+    /// fetch everything the device payload needs without per-computer detail calls.
+    /// Add a section by passing it here, not by copying the pagination loop.
     async fn inventory_sections(&self, sections: &[&str]) -> Result<Vec<Computer>, Error> {
         let sections: String = sections
             .iter()
@@ -127,21 +128,10 @@ impl JamfClient {
         Ok(all)
     }
 
-    /// Every computer, `general` only -- `model` and the OS version need `detail`.
-    pub async fn inventory(&self) -> Result<Vec<Computer>, Error> {
-        self.inventory_sections(&["GENERAL"]).await
-    }
-
     /// Every computer with every section the device payload needs, in one paginated
     /// pass -- no per-computer detail calls.
     pub async fn inventory_full(&self) -> Result<Vec<Computer>, Error> {
         self.inventory_sections(&["GENERAL", "HARDWARE", "OPERATING_SYSTEM"])
-            .await
-    }
-
-    /// All sections for one computer -- the only source of `model` and OS version.
-    pub async fn detail(&self, id: &str) -> Result<Computer, Error> {
-        self.get(&format!("/v4/computers-inventory-detail/{id}"))
             .await
     }
 

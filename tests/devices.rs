@@ -50,10 +50,10 @@ async fn devices_returns_well_formed_payload() {
         );
     }
 
-    // collect_devices sorts by name after the concurrent fan-out.
-    let names: Vec<&str> = devices
+    // Jamf's sort=general.name:asc is case-insensitive; nothing re-sorts in Rust.
+    let names: Vec<String> = devices
         .iter()
-        .map(|device| device["name"].as_str().unwrap())
+        .map(|device| device["name"].as_str().unwrap().to_lowercase())
         .collect();
     assert!(
         names.windows(2).all(|pair| pair[0] <= pair[1]),

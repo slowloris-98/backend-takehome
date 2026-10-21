@@ -7,12 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Jamf integration backend built as a take-home exercise. The crate, repo, and directory are all named `backend-takehome`. Two routes are wired up:
 
 - `GET /api/jamf/devices` — returns `{"devices": [...]}`, where each `Device` is `{device_id, name, model, os, os_is_latest}`, built from the live Jamf Pro API. Needs `.env` configured; returns `502` with the underlying message otherwise.
-- `GET /v1/api/jamf/devices` and `GET /v2/api/jamf/devices` — **temporary**. The same
-  `DevicesResponse` built two ways so the Jamf fetch strategies can be timed end to end:
-  `/v1` is the detail fan-out (same handler as `/api/jamf/devices`), `/v2` is the one-shot
-  multi-section inventory. Measured at N=6: v1 median 775 ms, v2 median 486 ms (1.6x), and
-  v2's request count is flat in N. Once the winner is adopted, both routes and the losing
-  arm come out.
 - `POST /api/jamf/credentials` — still a stub that mirrors the posted `{username, password, url}` back. It does not validate against Jamf or feed `JamfClient`, which reads the environment instead.
 
 [README.md](README.md) documents both routes with sample bash and PowerShell requests; keep it in sync when routes change.
@@ -47,23 +41,18 @@ Routes own HTTP shape; `services` owns everything that talks to Jamf. A handler 
 - [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: `#[derive(Serialize)]` response structs plus an `async fn` handler returning `Result<Json<T>, (StatusCode, String)>`. Nested payloads get their own struct (`Device`) held by the response struct (`DevicesResponse`) rather than inline `serde_json::json!`; field names are snake_case and serialized as-is. The handler is a thin wrapper that maps a `collect_devices()` error to `502`; the orchestration lives in that private fn.
 - [src/routes/credentials.rs](src/routes/credentials.rs) — the pattern for a POST: a separate `#[derive(Deserialize)]` request struct extracted via `Json(body): Json<Req>`, returning `Json<Res>`.
 - [src/services/](src/services/) — Jamf API access. [src/services/mod.rs](src/services/mod.rs) is a re-export list like the routes one.
-- [src/services/jamf.rs](src/services/jamf.rs) — `JamfClient` (constructed by `from_env()`, which trades basic auth for a bearer token) with one method per endpoint: `inventory()` (paginated, `page-size` 100, sorted `general.name:asc`), `detail(id)`, `available_updates()`. All of them go through a private generic `get<T>()`. Deserialization structs mirror Jamf's camelCase via `#[serde(rename)]`, and every section of `Computer` is `Option` because the list view returns only `general`. Also holds the free function `is_latest()` and its unit tests.
+- [src/services/jamf.rs](src/services/jamf.rs) — `JamfClient` (constructed by `from_env()`, which trades basic auth for a bearer token) with one method per endpoint: `inventory_full()` (paginated, `page-size` 100, sorted `general.name:asc`) and `available_updates()`. All of them go through a private generic `get<T>()`. Deserialization structs mirror Jamf's camelCase via `#[serde(rename)]`, and every section of `Computer` is `Option` because the list view returns only `general`. Also holds the free function `is_latest()` and its unit tests.
 
-`inventory()` and `inventory_full()` both delegate to the private `inventory_sections(&[&str])`,
-which builds the repeated `section=` params and runs the shared pagination loop — add a
-section by passing it, not by copying the loop. `inventory()` asks for `GENERAL` only;
-`inventory_full()` asks for `GENERAL`/`HARDWARE`/`OPERATING_SYSTEM` and so needs no `detail()`
-calls. `Computer` serves list, multi-section, and detail responses unchanged, which is why
-every section is `Option`.
+`inventory_full()` delegates to the private `inventory_sections(&[&str])`, which builds the
+repeated `section=` params and runs the shared pagination loop — add a section by passing it,
+not by copying the loop. `inventory_full()` asks for `GENERAL`/`HARDWARE`/`OPERATING_SYSTEM`,
+which is everything the device payload needs in one pass. Every section of `Computer` is
+still `Option` so the one type can serve both list and multi-section responses.
 
-Shape of `GET /api/jamf/devices`: the list call and the update catalog go out concurrently via `tokio::try_join!`, then per-computer `detail` calls fan out through a `JoinSet` capped at `CONCURRENCY` (16) in flight — `model` and the OS version are only available on the detail payload. Because the tasks complete out of order, `collect_devices` re-sorts by name at the end to restore the ordering requested from Jamf.
-
-`collect_devices_one_shot` (the `/v2` arm) is the contrast: `try_join!` the catalog with
-`inventory_full()`, then a plain `map` over the computers. No `Arc`, no `JoinSet`, and no
-final sort — Jamf's `general.name:asc` ordering survives because nothing reorders it. Note
-that this makes the two arms' ordering differ: `collect_devices` re-sorts with byte-wise
-`str::cmp` (uppercase before lowercase), while `/v2` keeps Jamf's case-insensitive order.
-Same devices, same field values, different collation.
+Shape of `GET /api/jamf/devices`: the update catalog and `inventory_full()` go out
+concurrently via `tokio::try_join!`, then a plain `map` builds each `Device`. That is the
+only concurrency — no `Arc`, no `JoinSet`, and no final sort, because nothing fans out or
+reorders. Jamf's `general.name:asc` ordering (case-insensitive) survives to the response.
 
 Each handler returns its own top-level struct (e.g. `{"devices":[...]}`); responses are not wrapped in a shared `data` envelope.
 
@@ -75,5 +64,5 @@ There is no `lib.rs` and no shared app state: `get_devices` builds a fresh `Jamf
 - Dependencies are pre-declared in [Cargo.toml](Cargo.toml) for the intended scope of the exercise. In use: `reqwest` (calling Jamf), `version-compare` (`is_latest`), `dotenv`, `serde`/`serde_json`, `tokio`. Declared but not yet used: `chrono`, `tower-http` with `cors`, `http`. Prefer these over adding new crates.
 - `JAMF_BASE_URL` includes the `/api` suffix — `JamfClient` paths start at the version segment (`/v1/...`, `/v4/...`), so they are appended directly. A trailing slash on the env var is trimmed.
 - `version-compare`'s `compare_to` returns a `Result`; both call sites in `is_latest` end in `.unwrap_or(false)` so an unparseable or non-semver version string yields `false` instead of panicking. An OS name absent from the update catalog also yields `false`. Keep that total-function behaviour — this runs over whatever strings Jamf returns.
-- The update catalog is keyed by OS name (`"macOS"`), matched against `operatingSystem.name` from the detail payload. The catalog's version list is not sorted, so `is_latest` reduces to find the max rather than taking the first or last entry.
+- The update catalog is keyed by OS name (`"macOS"`), matched against `operatingSystem.name` from the `OPERATING_SYSTEM` section. The catalog's version list is not sorted, so `is_latest` reduces to find the max rather than taking the first or last entry.
 - Secrets live in `.env`, which is gitignored along with `.env.*`. `main()` calls `dotenv::dotenv().ok()` before building the `Router`, so `.env` in the project root is loaded automatically on `cargo run` — no pre-exporting needed. A missing `.env` is not an error. Config is still read via `std::env::var` (see `JamfClient::from_env`), so real environment variables keep working and take precedence over `.env`. Never commit credentials; [.env.example](.env.example) documents the expected keys.

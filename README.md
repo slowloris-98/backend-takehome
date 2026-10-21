@@ -68,40 +68,13 @@ curl http://localhost:3000/api/jamf/devices
 | `os` | string | Current OS name and version, e.g. `macOS 15.3.1` |
 | `os_is_latest` | bool | Whether `os` is at least the newest version Jamf lists for it |
 
-#### Temporary comparison routes: `/v1/...` and `/v2/...`
+`model` and the OS version come from a single `/v4/computers-inventory` call asking for
+`section=GENERAL&section=HARDWARE&section=OPERATING_SYSTEM`, so one paginated pass covers
+every device with no per-device follow-up requests: `1 auth + 1 catalog + ceil(N/100) list`
+for N devices.
 
-The same payload is served three ways while two Jamf fetch strategies are measured
-against each other. These exist to be benchmarked, and one of them will be removed:
-
-| Route | Strategy | Jamf requests for N devices |
-| --- | --- | --- |
-| `/api/jamf/devices` | current default (same handler as `/v1`) | 1 auth + 1 catalog + ceil(N/100) list + N detail |
-| `/v1/api/jamf/devices` | inventory list, then a `detail` call per device, 16 in flight | 1 auth + 1 catalog + ceil(N/100) list + N detail |
-| `/v2/api/jamf/devices` | one multi-section inventory pass, no detail calls | 1 auth + 1 catalog + ceil(N/100) list |
-
-`/v2` asks `/v4/computers-inventory` for `section=GENERAL&section=HARDWARE&section=OPERATING_SYSTEM`,
-so `model` and the OS version arrive with the list and the per-device fan-out disappears.
-
-Measured over 6 alternating runs against a 6-device tenant:
-
-| Approach | n | min | median | max |
-| --- | --- | --- | --- | --- |
-| `/v1` detail fan-out | 6 | 739 ms | **775 ms** | 835 ms |
-| `/v2` multi-section | 6 | 461 ms | **486 ms** | 525 ms |
-
-v2 is ~289 ms (1.6x) faster at N=6, and its request count is flat in N where v1's grows
-linearly, so the gap widens with inventory size. The two payloads contain the same devices
-with the same field values; they differ only in sort collation (see below).
-
-```bash
-curl http://localhost:3000/v2/api/jamf/devices
-```
-
-> **Ordering caveat.** `/v1` re-sorts in Rust with `str::cmp`, which is byte-wise, so
-> uppercase names sort before lowercase ones (`cw-zsn-mac-1` lands last). `/v2` keeps the
-> `sort=general.name:asc` order Jamf returns, which is case-insensitive
-> (`cw-zsn-mac-1` lands first). `/v2` reflects what the request actually asks Jamf for;
-> `/v1`'s re-sort silently overrides it.
+Devices come back in the `sort=general.name:asc` order Jamf applies, which is
+case-insensitive. The endpoint does not impose a collation of its own.
 
 `os_is_latest` is `false` when the version cannot be compared — an OS Jamf lists no updates
 for, or a version string that does not parse — rather than erroring. Fields Jamf leaves out
