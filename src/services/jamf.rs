@@ -1,9 +1,76 @@
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
 use version_compare::{compare_to, Cmp};
 
-/// Any failure talking to Jamf, as a message ready for the HTTP response.
-pub type Error = String;
+/// Any failure talking to Jamf. Variants exist to separate "we are misconfigured"
+/// from "the upstream is unwell", which is what lets one error map to three
+/// different status codes -- see [`JamfError::status`].
+#[derive(Debug, thiserror::Error)]
+pub enum JamfError {
+    #[error("missing env var {0}")]
+    MissingEnv(String),
+
+    #[error("jamf auth request failed: {0}")]
+    Unreachable(#[source] reqwest::Error),
+
+    #[error("jamf auth rejected: {0}")]
+    AuthRejected(#[source] reqwest::Error),
+
+    #[error("jamf auth response invalid: {0}")]
+    AuthDecode(#[source] reqwest::Error),
+
+    #[error("GET {path} failed: {source}")]
+    Request {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("GET {path} returned error: {source}")]
+    Upstream {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("GET {path} response invalid: {source}")]
+    Decode {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+}
+
+/// Kept so the signatures in this module read as before.
+pub type Error = JamfError;
+
+impl JamfError {
+    pub fn status(&self) -> StatusCode {
+        match self {
+            // Our own deployment is unconfigured -- nothing upstream went wrong.
+            Self::MissingEnv(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            // Never reached Jamf at all: DNS, connect, or timeout.
+            Self::Unreachable(_) | Self::Request { .. } => StatusCode::GATEWAY_TIMEOUT,
+            // Jamf answered, but not with something we can use.
+            Self::AuthRejected(_)
+            | Self::AuthDecode(_)
+            | Self::Upstream { .. }
+            | Self::Decode { .. } => StatusCode::BAD_GATEWAY,
+        }
+    }
+}
+
+impl IntoResponse for JamfError {
+    fn into_response(self) -> axum::response::Response {
+        // JSON on the failure path too, matching the success bodies.
+        (
+            self.status(),
+            Json(serde_json::json!({ "error": self.to_string() })),
+        )
+            .into_response()
+    }
+}
 
 const PAGE_SIZE: usize = 100;
 
@@ -63,7 +130,7 @@ impl JamfClient {
     /// Reads JAMF_BASE_URL / JAMF_USERNAME / JAMF_PASSWORD from the environment
     /// and trades basic auth for a bearer token.
     pub async fn from_env() -> Result<Self, Error> {
-        let var = |k: &str| std::env::var(k).map_err(|_| format!("missing env var {k}"));
+        let var = |k: &str| std::env::var(k).map_err(|_| JamfError::MissingEnv(k.to_string()));
         let base_url = var("JAMF_BASE_URL")?.trim_end_matches('/').to_string();
         let (username, password) = (var("JAMF_USERNAME")?, var("JAMF_PASSWORD")?);
         let http = reqwest::Client::new();
@@ -74,12 +141,12 @@ impl JamfClient {
             .basic_auth(username, Some(password))
             .send()
             .await
-            .map_err(|e| format!("jamf auth request failed: {e}"))?
+            .map_err(JamfError::Unreachable)?
             .error_for_status()
-            .map_err(|e| format!("jamf auth rejected: {e}"))?
+            .map_err(JamfError::AuthRejected)?
             .json()
             .await
-            .map_err(|e| format!("jamf auth response invalid: {e}"))?;
+            .map_err(JamfError::AuthDecode)?;
 
         Ok(Self {
             http,
@@ -95,12 +162,21 @@ impl JamfClient {
             .bearer_auth(&self.token)
             .send()
             .await
-            .map_err(|e| format!("GET {path} failed: {e}"))?
+            .map_err(|source| JamfError::Request {
+                path: path.to_string(),
+                source,
+            })?
             .error_for_status()
-            .map_err(|e| format!("GET {path} returned error: {e}"))?
+            .map_err(|source| JamfError::Upstream {
+                path: path.to_string(),
+                source,
+            })?
             .json()
             .await
-            .map_err(|e| format!("GET {path} response invalid: {e}"))
+            .map_err(|source| JamfError::Decode {
+                path: path.to_string(),
+                source,
+            })
     }
 
     /// Every computer carrying `sections`, following pages until `totalCount` is

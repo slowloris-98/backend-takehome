@@ -78,9 +78,14 @@ It neither validates against Jamf nor feeds `JamfClient`, which the spec allows 
 - **Fresh token per request.** With no shared state each request re-authenticates and
   discards a new `reqwest::Client`'s connection pool, so the next step is an `AppState`
   via `Router::with_state` holding one client and a cached token.
-- **Errors are `String`**, all mapped to `502`, which keeps the error path short but
-  conflates a missing env var with a gateway failure until `thiserror` and distinct
-  status codes land.
+- **Errors are a typed `JamfError`** (`thiserror`), because the status code depends on
+  whose fault the failure is: a missing `JAMF_*` var is our own misconfiguration and
+  returns `500`, a failure to reach Jamf at all (DNS, connect, timeout) returns `504`,
+  and a Jamf response we cannot use -- rejected auth, non-2xx, unparseable body --
+  returns `502`. A `String` carried no machine-readable kind, so all three collapsed
+  into `502`. Variants keep the `#[source]` `reqwest::Error` rather than flattening it
+  into text, and `IntoResponse` renders `{"error": "..."}` so the failure path is JSON
+  like the success path.
 - **Missing fields → empty strings** via `unwrap_or_default()`, so a device with no OS
   section still reports `os: ""` -- an empty string is self-describing for a display
   field, whereas the bare `false` it replaced was not.

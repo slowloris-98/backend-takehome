@@ -25,7 +25,7 @@ cargo run
 The server listens on `0.0.0.0:3000`.
 
 > `GET /api/jamf/devices` calls the live Jamf Pro API and needs `.env` configured; it
-> returns `502` with `missing env var JAMF_BASE_URL` if it is not. `POST` to
+> returns `500` with `{"error": "missing env var JAMF_BASE_URL"}` if it is not. `POST` to
 > `/api/jamf/credentials` is still a stub that mirrors back whatever you send.
 
 ## Routes
@@ -93,11 +93,17 @@ from `false` ("genuinely behind"), so counting out-of-date devices does not sile
 devices Jamf never reported an OS for. The key is always present. Other fields Jamf leaves
 out come back as empty strings, which is why an unknown device shows `os: ""`.
 
-Any failure reaching Jamf (missing config, rejected credentials, an API error) returns `502`
-with the underlying message as the body:
+Failures return a JSON body of `{"error": "<message>"}`, with the status chosen by
+whose fault the failure is:
 
-```
-missing env var JAMF_BASE_URL
+| Status | When | Example message |
+|---|---|---|
+| `500` | a `JAMF_*` env var is missing -- this server is misconfigured | `missing env var JAMF_BASE_URL` |
+| `504` | Jamf could not be reached at all (DNS, connect, timeout) | `jamf auth request failed: ... dns error` |
+| `502` | Jamf answered, but unusably: rejected credentials, a non-2xx, or a body that would not parse | `jamf auth rejected: HTTP status client error (401 Unauthorized)` |
+
+```json
+{ "error": "missing env var JAMF_BASE_URL" }
 ```
 
 ### `POST /api/jamf/credentials`

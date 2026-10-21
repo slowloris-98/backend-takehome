@@ -1,5 +1,5 @@
-use crate::services::jamf::{is_latest, JamfClient};
-use axum::{http::StatusCode, response::Json};
+use crate::services::jamf::{is_latest, JamfClient, JamfError};
+use axum::response::Json;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -17,16 +17,13 @@ pub struct DevicesResponse {
     pub devices: Vec<Device>,
 }
 
-pub async fn get_devices() -> Result<Json<DevicesResponse>, (StatusCode, String)> {
-    collect_devices()
-        .await
-        .map(Json)
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e))
+pub async fn get_devices() -> Result<Json<DevicesResponse>, JamfError> {
+    collect_devices().await.map(Json)
 }
 
 /// Builds the device list from a single multi-section inventory pass -- `model` and
 /// the OS version arrive with the list, so there are no per-computer detail calls.
-async fn collect_devices() -> Result<DevicesResponse, String> {
+async fn collect_devices() -> Result<DevicesResponse, JamfError> {
     let client = JamfClient::from_env().await?;
 
     // Independent, so concurrent -- but that is the only concurrency here: no Arc
