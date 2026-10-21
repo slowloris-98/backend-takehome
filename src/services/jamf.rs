@@ -152,3 +152,32 @@ pub fn is_latest(updates: &HashMap<String, Vec<String>>, os_name: &str, version:
     };
     compare_to(version, newest, Cmp::Ge).unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_latest;
+    use std::collections::HashMap;
+
+    /// Unsorted on purpose: `is_latest` must find the max, not the first or last.
+    fn catalog() -> HashMap<String, Vec<String>> {
+        HashMap::from([(
+            "macOS".to_string(),
+            vec!["15.1".to_string(), "15.3.1".to_string(), "15.2".to_string()],
+        )])
+    }
+
+    #[test]
+    fn older_version_is_not_latest() {
+        assert!(!is_latest(&catalog(), "macOS", "15.2"));
+    }
+
+    #[test]
+    fn equal_version_is_latest() {
+        assert!(is_latest(&catalog(), "macOS", "15.3.1"));
+    }
+
+    #[test]
+    fn newer_version_is_latest() {
+        assert!(is_latest(&catalog(), "macOS", "15.4"));
+    }
+}

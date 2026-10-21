@@ -105,3 +105,30 @@ Response:
 ```
 
 Credentials belong in `.env` (gitignored) — never commit them.
+
+## Tests
+
+```bash
+cargo test --bin backend-takehome   # version-comparison unit tests, no server needed
+cargo test -- --nocapture           # everything, incl. the round-trip timing line
+```
+
+Coverage is deliberately narrow: the `os_is_latest` comparison (older / equal / newer
+than the newest version Jamf lists) and the shape of `GET /api/jamf/devices`.
+`POST /api/jamf/credentials` is a pure mirror and is not tested.
+
+The tests in [tests/devices.rs](tests/devices.rs) hit a **running** server and real Jamf
+data, so start `cargo run` in another terminal with a valid `.env` first. With nothing
+listening on port 3000 they print a skip notice and pass, so read the output rather than
+trusting the exit code alone. They assert only the response shape — status, the five
+fields and their types, and the name ordering — never specific device names, so they
+survive inventory changes.
+
+On Windows a server started with `cargo run` holds a lock on
+`target/debug/backend-takehome.exe`, and `cargo test` fails with `Access is denied
+(os error 5)` when it tries to relink. Either stop the server and use a separately
+started one, or build the tests elsewhere:
+
+```bash
+CARGO_TARGET_DIR=target/test cargo test -- --nocapture
+```

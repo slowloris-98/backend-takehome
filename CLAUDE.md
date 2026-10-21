@@ -26,7 +26,9 @@ cargo test <name> -- --exact --nocapture   # run one test, show println output
 
 Smoke check: `curl http://localhost:3000/api/jamf/devices`
 
-There are no tests yet, so `cargo test` currently compiles and reports zero tests.
+`cargo test --bin backend-takehome` runs the `is_latest` unit tests alone; the `tests/devices.rs`
+integration tests need a server already running on port 3000 (see README). A running `cargo run`
+locks the binary on Windows, so use `CARGO_TARGET_DIR=target/test` to test alongside it.
 
 ## Architecture
 
