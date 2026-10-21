@@ -40,24 +40,46 @@ async fn devices_returns_well_formed_payload() {
                 "`{field}` missing or not a string in {device}"
             );
         }
+        // Indexing a missing key also yields Null, so check the key is really
+        // there -- `null` must mean "unknown", not "field omitted".
+        let flag = device
+            .get("os_is_latest")
+            .unwrap_or_else(|| panic!("`os_is_latest` missing in {device}"));
         assert!(
-            device["os_is_latest"].is_boolean(),
-            "`os_is_latest` missing or not a bool in {device}"
+            flag.is_boolean() || flag.is_null(),
+            "`os_is_latest` was neither bool nor null in {device}"
         );
+        // Unknown is only legitimate when there is no OS string to compare. The
+        // inverse does not hold: a known os can still be null if Jamf lists no
+        // updates for it, so only this direction is safe to assert.
+        if flag.is_null() {
+            assert!(
+                device["os"].as_str().unwrap().is_empty(),
+                "`os_is_latest` was null despite a known os in {device}"
+            );
+        }
         assert!(
             !device["device_id"].as_str().unwrap().is_empty(),
             "`device_id` was empty in {device}"
         );
     }
 
-    // collect_devices sorts by name after the concurrent fan-out.
-    let names: Vec<&str> = devices
+    // We paginate with sort=id:asc for a stable page window, and nothing re-sorts in
+    // Rust, so that order reaches the response. Jamf sorts `id` numerically, so parse
+    // before comparing -- a lexical check would fail on "10" < "9".
+    let ids: Vec<u64> = devices
         .iter()
-        .map(|device| device["name"].as_str().unwrap())
+        .map(|device| {
+            device["device_id"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .expect("device_id was not numeric")
+        })
         .collect();
     assert!(
-        names.windows(2).all(|pair| pair[0] <= pair[1]),
-        "devices were not sorted by name: {names:?}"
+        ids.windows(2).all(|pair| pair[0] <= pair[1]),
+        "devices were not sorted by device_id: {ids:?}"
     );
 }
 

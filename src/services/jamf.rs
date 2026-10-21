@@ -103,13 +103,25 @@ impl JamfClient {
             .map_err(|e| format!("GET {path} response invalid: {e}"))
     }
 
-    /// Every computer, following pages until `totalCount` is covered.
-    pub async fn inventory(&self) -> Result<Vec<Computer>, Error> {
+    /// Every computer carrying `sections`, following pages until `totalCount` is
+    /// covered. Jamf accepts `section` repeated, which is what lets `inventory_full`
+    /// fetch everything the device payload needs without per-computer detail calls.
+    /// Add a section by passing it here, not by copying the pagination loop.
+    ///
+    /// Sorted by `id` because Jamf pages by offset, so the sort key has to be stable
+    /// for the whole pass: `general.name` is mutable, and a device renamed between two
+    /// page requests moves within the ordering and gets skipped or returned twice.
+    /// `id` is immutable, so the page window cannot shift under us.
+    async fn inventory_sections(&self, sections: &[&str]) -> Result<Vec<Computer>, Error> {
+        let sections: String = sections
+            .iter()
+            .map(|section| format!("section={section}&"))
+            .collect();
         let mut all: Vec<Computer> = Vec::new();
         for page in 0.. {
             let page: InventoryPage = self
                 .get(&format!(
-                    "/v4/computers-inventory?section=GENERAL&page={page}&page-size={PAGE_SIZE}&sort=general.name%3Aasc"
+                    "/v4/computers-inventory?{sections}page={page}&page-size={PAGE_SIZE}&sort=id%3Aasc"
                 ))
                 .await?;
             let exhausted = page.results.is_empty();
@@ -121,9 +133,10 @@ impl JamfClient {
         Ok(all)
     }
 
-    /// All sections for one computer -- the only source of `model` and OS version.
-    pub async fn detail(&self, id: &str) -> Result<Computer, Error> {
-        self.get(&format!("/v4/computers-inventory-detail/{id}"))
+    /// Every computer with every section the device payload needs, in one paginated
+    /// pass -- no per-computer detail calls.
+    pub async fn inventory_full(&self) -> Result<Vec<Computer>, Error> {
+        self.inventory_sections(&["GENERAL", "HARDWARE", "OPERATING_SYSTEM"])
             .await
     }
 
@@ -135,22 +148,32 @@ impl JamfClient {
     }
 }
 
-/// True when `version` is at least the highest version Jamf lists for `os_name`.
-/// An unknown OS or an unparseable version yields `false` rather than panicking.
-pub fn is_latest(updates: &HashMap<String, Vec<String>>, os_name: &str, version: &str) -> bool {
-    let Some(candidates) = updates.get(os_name) else {
-        return false;
-    };
-    let Some(newest) = candidates.iter().reduce(|best, candidate| {
+/// `Some(true)` when `version` is at least the highest version Jamf lists for
+/// `os_name`, `Some(false)` when it is behind, and `None` when no comparison is
+/// possible -- no OS reported, an OS absent from the catalog, or a version string
+/// that does not parse. Still total: it never panics over whatever Jamf returns.
+pub fn is_latest(
+    updates: &HashMap<String, Vec<String>>,
+    os_name: &str,
+    version: &str,
+) -> Option<bool> {
+    // Nothing to compare: the device reported no OS section at all.
+    if os_name.is_empty() || version.is_empty() {
+        return None;
+    }
+    let candidates = updates.get(os_name)?;
+    let newest = candidates.iter().reduce(|best, candidate| {
+        // Unlike the comparison below, this one ranks Jamf's own catalog entries
+        // against each other. A single unparseable entry must not blank out every
+        // device on this OS, so it loses the reduce rather than yielding None.
         if compare_to(candidate, best, Cmp::Gt).unwrap_or(false) {
             candidate
         } else {
             best
         }
-    }) else {
-        return false;
-    };
-    compare_to(version, newest, Cmp::Ge).unwrap_or(false)
+    })?;
+    // This one is the caller's actual question, so a parse failure is unknown.
+    compare_to(version, newest, Cmp::Ge).ok()
 }
 
 #[cfg(test)]
@@ -168,16 +191,57 @@ mod tests {
 
     #[test]
     fn older_version_is_not_latest() {
-        assert!(!is_latest(&catalog(), "macOS", "15.2"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.2"), Some(false));
     }
 
     #[test]
     fn equal_version_is_latest() {
-        assert!(is_latest(&catalog(), "macOS", "15.3.1"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.3.1"), Some(true));
     }
 
     #[test]
     fn newer_version_is_latest() {
-        assert!(is_latest(&catalog(), "macOS", "15.4"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.4"), Some(true));
+    }
+
+    #[test]
+    fn unknown_os_is_unknown() {
+        assert_eq!(is_latest(&catalog(), "iOS", "18.1"), None);
+    }
+
+    /// A device whose inventory row carries no `operatingSystem` section collapses
+    /// to empty strings in the handler -- unknown, not "not latest".
+    #[test]
+    fn missing_os_details_are_unknown() {
+        assert_eq!(is_latest(&catalog(), "", ""), None);
+        assert_eq!(is_latest(&catalog(), "macOS", ""), None);
+        assert_eq!(is_latest(&catalog(), "", "15.3.1"), None);
+    }
+
+    #[test]
+    fn unparseable_version_is_unknown() {
+        assert_eq!(is_latest(&catalog(), "macOS", "not-a-version"), None);
+    }
+
+    #[test]
+    fn empty_candidate_list_is_unknown() {
+        let updates = HashMap::from([("macOS".to_string(), Vec::new())]);
+        assert_eq!(is_latest(&updates, "macOS", "15.3.1"), None);
+    }
+
+    /// Junk *inside* Jamf's catalog must not blank out every device on that OS:
+    /// the bad entry loses the reduce and the real maximum still wins.
+    #[test]
+    fn junk_catalog_entry_does_not_make_result_unknown() {
+        let updates = HashMap::from([(
+            "macOS".to_string(),
+            vec![
+                "15.1".to_string(),
+                "garbage".to_string(),
+                "15.3.1".to_string(),
+            ],
+        )]);
+        assert_eq!(is_latest(&updates, "macOS", "15.3.1"), Some(true));
+        assert_eq!(is_latest(&updates, "macOS", "15.2"), Some(false));
     }
 }
