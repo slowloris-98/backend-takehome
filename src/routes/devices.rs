@@ -8,7 +8,8 @@ pub struct Device {
     pub name: String,
     pub model: String,
     pub os: String,
-    pub os_is_latest: bool,
+    /// `None` when the OS cannot be compared -- serialized as JSON `null`.
+    pub os_is_latest: Option<bool>,
 }
 
 #[derive(Serialize)]

@@ -9,8 +9,8 @@ The requirement is straightforward: if the version is older than the latest, the
 not on the latest version. A device on macOS 15 when 27.0.1 is available is not on the
 latest macOS, so it reports `false`.
 
-Kept total on purpose: an OS name absent from the catalog, or a version string
-`version-compare` cannot parse, yields `false` rather than panicking. The catalog is
+Kept total on purpose: it never panics over whatever strings Jamf returns. But a
+failed comparison is no longer reported as `false` -- see decision 3. The catalog is
 unsorted, so the implementation reduces to find the maximum.
 
 ## 2. Two fetch strategies, measured
@@ -46,7 +46,28 @@ gap widens with inventory size.
 
 Hence the multi-section one-shot approach ships as the single `GET /api/jamf/devices`.
 
-## 3. Computer inventory only for now
+## 3. `os_is_latest` is `bool | null`, not `bool`
+
+A plain `bool` answered `false` both to "this device is behind" and "we cannot tell",
+so devices Jamf reports no OS for looked genuinely out of date. `is_latest` returns
+`Option<bool>` instead, and the key is always present -- `null` is a value, not an
+absence.
+
+| `os_is_latest` | When |
+| --- | --- |
+| `true` | Version is at or ahead of the newest Jamf lists for that OS |
+| `false` | Version is behind the newest Jamf lists for that OS |
+| `null` | No OS reported (empty name or version) |
+| `null` | OS name absent from the update catalog |
+| `null` | Catalog lists no versions for that OS |
+| `null` | Version string `version-compare` cannot parse |
+
+A malformed entry *inside* the catalog is the one exception: it loses the max-finding
+reduce rather than yielding `null`, so one bad string cannot blank out every device on
+that OS. A unit test pins this. `os` still uses `""` -- the ambiguity was specific to
+the boolean.
+
+## 4. Computer inventory only for now
 
 In current implementation mobile devices are not included. The assignment frames Jamf as the macOS side, so
 computers are the core deliverable but plan to include later.
@@ -67,8 +88,9 @@ computers are the core deliverable but plan to include later.
   missing env var (a local `500`) with a gateway failure. `thiserror` + distinct status
   codes is the next step.
 - **Missing fields → empty strings** via `unwrap_or_default()`, so a device with no OS
-  section reports `os: ""` and `os_is_latest: false`. `Option<String>`/`Option<bool>`
-  would distinguish "unknown" from "not latest".
+  section still reports `os: ""`. `os_is_latest` no longer follows that pattern (see
+  decision 3); `os` could become `Option<String>` for the same reason, but an empty
+  string is already self-describing for a display field, whereas a bare `false` was not.
 - **Ordering is not a guarantee.** Sorting was never a stated requirement of the
   assessment, so the endpoint imposes no collation of its own -- it just passes
   through Jamf's `sort=general.name:asc`, which is case-insensitive. The earlier

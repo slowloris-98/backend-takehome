@@ -55,6 +55,13 @@ curl http://localhost:3000/api/jamf/devices
       "model": "MacBook Pro (14-inch, M3 Pro, 2023)",
       "os": "macOS 15.3.1",
       "os_is_latest": true
+    },
+    {
+      "device_id": "103",
+      "name": "Spare MacBook",
+      "model": "MacBook Pro (16-inch, M5 Pro)",
+      "os": "",
+      "os_is_latest": null
     }
   ]
 }
@@ -66,7 +73,7 @@ curl http://localhost:3000/api/jamf/devices
 | `name` | string | Device display name |
 | `model` | string | Hardware model |
 | `os` | string | Current OS name and version, e.g. `macOS 15.3.1` |
-| `os_is_latest` | bool | Whether `os` is at least the newest version Jamf lists for it |
+| `os_is_latest` | bool \| null | Whether `os` is at least the newest version Jamf lists for it; `null` when unknown |
 
 `model` and the OS version come from a single `/v4/computers-inventory` call asking for
 `section=GENERAL&section=HARDWARE&section=OPERATING_SYSTEM`, so one paginated pass covers
@@ -76,9 +83,12 @@ for N devices.
 Devices come back in the `sort=general.name:asc` order Jamf applies, which is
 case-insensitive. The endpoint does not impose a collation of its own.
 
-`os_is_latest` is `false` when the version cannot be compared — an OS Jamf lists no updates
-for, or a version string that does not parse — rather than erroring. Fields Jamf leaves out
-come back as empty strings.
+`os_is_latest` is `true` or `false` when the comparison succeeds, and `null` when it cannot
+be made at all — the device reported no OS, the OS is absent from Jamf's update catalog, or
+the version string does not parse. `null` means "unknown", which is deliberately distinct
+from `false` ("genuinely behind"), so counting out-of-date devices does not silently include
+devices Jamf never reported an OS for. The key is always present. Other fields Jamf leaves
+out come back as empty strings, which is why an unknown device shows `os: ""`.
 
 Any failure reaching Jamf (missing config, rejected credentials, an API error) returns `502`
 with the underlying message as the body:
@@ -134,15 +144,16 @@ cargo test -- --nocapture           # everything, incl. the round-trip timing li
 ```
 
 Coverage is deliberately narrow: the `os_is_latest` comparison (older / equal / newer
-than the newest version Jamf lists) and the shape of `GET /api/jamf/devices`.
-`POST /api/jamf/credentials` is a pure mirror and is not tested.
+than the newest version Jamf lists, plus the unknown cases that yield `null`) and the
+shape of `GET /api/jamf/devices`. `POST /api/jamf/credentials` is a pure mirror and is
+not tested.
 
 The tests in [tests/devices.rs](tests/devices.rs) hit a **running** server and real Jamf
 data, so start `cargo run` in another terminal with a valid `.env` first. With nothing
 listening on port 3000 they print a skip notice and pass, so read the output rather than
 trusting the exit code alone. They assert only the response shape — status, the five
-fields and their types, and the name ordering — never specific device names, so they
-survive inventory changes.
+fields and their types (`os_is_latest` being bool or `null`), and the name ordering —
+never specific device names, so they survive inventory changes.
 
 On Windows a server started with `cargo run` holds a lock on
 `target/debug/backend-takehome.exe`, and `cargo test` fails with `Access is denied

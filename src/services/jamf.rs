@@ -143,22 +143,32 @@ impl JamfClient {
     }
 }
 
-/// True when `version` is at least the highest version Jamf lists for `os_name`.
-/// An unknown OS or an unparseable version yields `false` rather than panicking.
-pub fn is_latest(updates: &HashMap<String, Vec<String>>, os_name: &str, version: &str) -> bool {
-    let Some(candidates) = updates.get(os_name) else {
-        return false;
-    };
-    let Some(newest) = candidates.iter().reduce(|best, candidate| {
+/// `Some(true)` when `version` is at least the highest version Jamf lists for
+/// `os_name`, `Some(false)` when it is behind, and `None` when no comparison is
+/// possible -- no OS reported, an OS absent from the catalog, or a version string
+/// that does not parse. Still total: it never panics over whatever Jamf returns.
+pub fn is_latest(
+    updates: &HashMap<String, Vec<String>>,
+    os_name: &str,
+    version: &str,
+) -> Option<bool> {
+    // Nothing to compare: the device reported no OS section at all.
+    if os_name.is_empty() || version.is_empty() {
+        return None;
+    }
+    let candidates = updates.get(os_name)?;
+    let newest = candidates.iter().reduce(|best, candidate| {
+        // Unlike the comparison below, this one ranks Jamf's own catalog entries
+        // against each other. A single unparseable entry must not blank out every
+        // device on this OS, so it loses the reduce rather than yielding None.
         if compare_to(candidate, best, Cmp::Gt).unwrap_or(false) {
             candidate
         } else {
             best
         }
-    }) else {
-        return false;
-    };
-    compare_to(version, newest, Cmp::Ge).unwrap_or(false)
+    })?;
+    // This one is the caller's actual question, so a parse failure is unknown.
+    compare_to(version, newest, Cmp::Ge).ok()
 }
 
 #[cfg(test)]
@@ -176,16 +186,57 @@ mod tests {
 
     #[test]
     fn older_version_is_not_latest() {
-        assert!(!is_latest(&catalog(), "macOS", "15.2"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.2"), Some(false));
     }
 
     #[test]
     fn equal_version_is_latest() {
-        assert!(is_latest(&catalog(), "macOS", "15.3.1"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.3.1"), Some(true));
     }
 
     #[test]
     fn newer_version_is_latest() {
-        assert!(is_latest(&catalog(), "macOS", "15.4"));
+        assert_eq!(is_latest(&catalog(), "macOS", "15.4"), Some(true));
+    }
+
+    #[test]
+    fn unknown_os_is_unknown() {
+        assert_eq!(is_latest(&catalog(), "iOS", "18.1"), None);
+    }
+
+    /// A device whose inventory row carries no `operatingSystem` section collapses
+    /// to empty strings in the handler -- unknown, not "not latest".
+    #[test]
+    fn missing_os_details_are_unknown() {
+        assert_eq!(is_latest(&catalog(), "", ""), None);
+        assert_eq!(is_latest(&catalog(), "macOS", ""), None);
+        assert_eq!(is_latest(&catalog(), "", "15.3.1"), None);
+    }
+
+    #[test]
+    fn unparseable_version_is_unknown() {
+        assert_eq!(is_latest(&catalog(), "macOS", "not-a-version"), None);
+    }
+
+    #[test]
+    fn empty_candidate_list_is_unknown() {
+        let updates = HashMap::from([("macOS".to_string(), Vec::new())]);
+        assert_eq!(is_latest(&updates, "macOS", "15.3.1"), None);
+    }
+
+    /// Junk *inside* Jamf's catalog must not blank out every device on that OS:
+    /// the bad entry loses the reduce and the real maximum still wins.
+    #[test]
+    fn junk_catalog_entry_does_not_make_result_unknown() {
+        let updates = HashMap::from([(
+            "macOS".to_string(),
+            vec![
+                "15.1".to_string(),
+                "garbage".to_string(),
+                "15.3.1".to_string(),
+            ],
+        )]);
+        assert_eq!(is_latest(&updates, "macOS", "15.3.1"), Some(true));
+        assert_eq!(is_latest(&updates, "macOS", "15.2"), Some(false));
     }
 }
