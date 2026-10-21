@@ -4,9 +4,14 @@ use axum::{
 };
 
 pub mod routes;
+pub mod services;
 
 #[tokio::main]
 async fn main() {
+    // Load .env into the process environment; JamfClient::from_env reads it from there.
+    // Absent .env is fine -- vars may already come from the real environment.
+    dotenv::dotenv().ok();
+
     let app = Router::new()
         .route(
             "/api/jamf/credentials",
