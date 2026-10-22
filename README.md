@@ -2,6 +2,8 @@
 
 A Jamf integration backend built with Axum.
 
+![Backend service system architecture](docs/sys_arch.png)
+
 ## Run
 
 Install Rust: https://www.rust-lang.org/learn/get-started
