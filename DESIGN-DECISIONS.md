@@ -69,6 +69,28 @@ Sorting was never a stated requirement, so the endpoint imposes no collation of 
 
 It neither validates against Jamf nor feeds `JamfClient`, which the spec allows explicitly since persistence was optional. Also if implemented, we would not be echoing the password back.
 
+## 8. Tests split by what they need
+
+Unit tests cover the three pieces of logic that are pure, so they need no server and no
+Jamf tenant: `is_latest` (the version comparison and every path to `null`),
+`JamfError::status` (the 500/504/502 mapping), and `to_device` (field defaulting, and the
+trim that keeps `os` from being `" "` on a device with no OS section). `to_device` was
+extracted from `collect_devices` precisely to make that mapping testable apart from the I/O
+around it.
+
+The integration tests in `tests/devices.rs` need a running server and live Jamf data, so
+they are `#[ignore]`d. The earlier version caught the connection error and returned early,
+which meant `cargo test` reported them as **passed** with nothing having been tested — a
+green that had to be checked against stdout to be believed. Now a plain `cargo test` lists
+them as ignored, and `cargo test -- --ignored` fails outright if the server is missing. Both
+states are honest about what ran.
+
+They assert only the response shape — status, the five fields and their types, and the
+`device_id` ordering — never specific device names, so they survive inventory changes.
+
+Not covered: the pagination loop and the `get<T>()` error paths, which need the HTTP layer
+mocked (`wiremock`, or a base-URL override pointed at a stub). That is the next test to add.
+
 ## Other decisions
 
 - **Credentials from the environment.** `from_env` reads `JAMF_*` via `std::env::var`
@@ -86,6 +108,13 @@ It neither validates against Jamf nor feeds `JamfClient`, which the spec allows 
   into `502`. Variants keep the `#[source]` `reqwest::Error` rather than flattening it
   into text, and `IntoResponse` renders `{"error": "..."}` so the failure path is JSON
   like the success path.
+- **Timeouts are consts, not config.** `reqwest` sets no timeout by default, so a hung Jamf
+  would hang the handler forever and make the `504` branch unreachable. The client is built
+  with a 10s total and a separate, shorter 5s connect timeout — failing to connect at all
+  should not burn the whole budget. They are consts rather than `JAMF_*` env vars because,
+  unlike the base URL and credentials, they do not vary per deployment. Both bound one
+  request: `inventory_full()` paginates, so the endpoint as a whole is not bounded, which
+  would need a server-level timeout layer.
 - **Missing fields → empty strings** via `unwrap_or_default()`, so a device with no OS
   section still reports `os: ""` -- an empty string is self-describing for a display
   field, whereas the bare `false` it replaced was not.

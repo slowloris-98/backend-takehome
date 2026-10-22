@@ -27,8 +27,8 @@ cargo test <name> -- --exact --nocapture   # run one test, show println output
 
 Smoke check: `curl http://localhost:3000/api/jamf/devices`
 
-`cargo test` runs the unit tests (`is_latest` in `services::jamf`, `to_device` in
-`routes::devices`); the `tests/devices.rs` integration tests need a server already running
+`cargo test` runs the unit tests — `is_latest` and `JamfError::status` in `services::jamf`,
+`to_device` in `routes::devices`; the `tests/devices.rs` integration tests need a server running
 on port 3000 with a valid `.env` (see README), so they are `#[ignore]`d and show as ignored
 rather than passing vacuously. Opt in with `cargo test -- --ignored`, where a missing server
 fails instead of skipping. A running `cargo run` locks the binary on Windows (`Access is
@@ -40,10 +40,18 @@ Routes own HTTP shape; `services` owns everything that talks to Jamf. A handler 
 
 - [src/main.rs](src/main.rs) — binary entry point. Declares `pub mod routes` and `pub mod services`, calls `dotenv::dotenv().ok()`, builds the `Router`, binds hyper to `0.0.0.0:3000`. Every new route must be registered on the `Router` here.
 - [src/routes/](src/routes/) — one file per handler group. [src/routes/mod.rs](src/routes/mod.rs) is a plain re-export list (`pub mod credentials;`, `pub mod devices;`) and must be updated when adding a route file.
-- [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: `#[derive(Serialize)]` response structs plus an `async fn` handler returning `Result<Json<T>, JamfError>`. Nested payloads get their own struct (`Device`) held by the response struct (`DevicesResponse`) rather than inline `serde_json::json!`; field names are snake_case and serialized as-is. The handler is a thin wrapper around `collect_devices()` -- it chooses no status code, because `JamfError: IntoResponse` does that; the orchestration lives in that private fn.
+- [src/routes/devices.rs](src/routes/devices.rs) — the pattern to follow for a GET: `#[derive(Serialize)]` response structs plus an `async fn` handler returning `Result<Json<T>, JamfError>`. Nested payloads get their own struct (`Device`) held by the response struct (`DevicesResponse`) rather than inline `serde_json::json!`; field names are snake_case and serialized as-is. The handler is a thin wrapper around `collect_devices()` -- it chooses no status code, because `JamfError: IntoResponse` does that; the orchestration lives in that private fn, and the per-row flattening lives in the pure `to_device(Computer, &updates) -> Device` beside it. That split is what makes the field defaulting unit-testable without a server — keep I/O in `collect_devices` and mapping in `to_device`.
 - [src/routes/credentials.rs](src/routes/credentials.rs) — the pattern for a POST: a separate `#[derive(Deserialize)]` request struct extracted via `Json(body): Json<Req>`, returning `Json<Res>`.
 - [src/services/](src/services/) — Jamf API access. [src/services/mod.rs](src/services/mod.rs) is a re-export list like the routes one.
 - [src/services/jamf.rs](src/services/jamf.rs) — `JamfClient` (constructed by `from_env()`, which trades basic auth for a bearer token) with one method per endpoint: `inventory_full()` (paginated, `page-size` 100, sorted `id:asc`) and `available_updates()`. All of them go through a private generic `get<T>()`. Deserialization structs mirror Jamf's camelCase via `#[serde(rename)]`, and every section of `Computer` is `Option` because the list view returns only `general`. Also holds the free function `is_latest()` and its unit tests.
+
+The `reqwest::Client` is built with the `REQUEST_TIMEOUT` / `CONNECT_TIMEOUT` consts at the
+top of the file, not `Client::new()` — `reqwest` has no default timeout, so without them a
+hung Jamf would hang the handler forever and the `504` branch would be unreachable. They are
+consts rather than env vars because they do not vary per deployment. Both bound a *single*
+request, not the whole handler: `inventory_full()` paginates, so a slow Jamf can still cost
+`REQUEST_TIMEOUT` per page. Bounding the endpoint as a whole would need a server-level
+timeout layer.
 
 `inventory_full()` delegates to the private `inventory_sections(&[&str])`, which builds the
 repeated `section=` params and runs the shared pagination loop — add a section by passing it,

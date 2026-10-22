@@ -13,8 +13,9 @@ Jamf Pro credentials:
 cp .env.example .env
 ```
 
-`.env` needs `JAMF_BASE_URL`, `JAMF_USERNAME` and `JAMF_PASSWORD`; the account needs the
-"Read Computers" privilege. `.env` is gitignored and is loaded automatically at startup,
+`.env` needs `JAMF_BASE_URL`, `JAMF_USERNAME` and `JAMF_PASSWORD`. The account needs read
+access to both computer inventory and managed software updates, since `GET
+/api/jamf/devices` calls each. `.env` is gitignored and is loaded automatically at startup,
 so no exporting is needed. Real environment variables override it, which is how you would
 supply these in a container or CI.
 
@@ -105,6 +106,11 @@ whose fault the failure is:
 ```json
 { "error": "missing env var JAMF_BASE_URL" }
 ```
+
+Each Jamf call is bounded: 5s to connect, 10s in total. `reqwest` applies no timeout by
+default, so an unresponsive Jamf would otherwise hang the request indefinitely rather than
+surfacing as the `504` above. The bound is per request, not per handler — the paginated
+inventory pass can spend it on each page.
 
 ### `POST /api/jamf/credentials`
 
