@@ -1,9 +1,90 @@
+use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use version_compare::{compare_to, Cmp};
 
-/// Any failure talking to Jamf, as a message ready for the HTTP response.
-pub type Error = String;
+/// Ceiling on a *single* Jamf HTTP call, start to finish. Not configurable on
+/// purpose: unlike the base URL and credentials, this does not vary per
+/// deployment, so it stays a constant rather than another env var.
+///
+/// Note this bounds one request, not one handler -- `inventory_full()`
+/// paginates, so a slow Jamf can still cost this much per page. Bounding the
+/// endpoint as a whole would need a server-level timeout layer.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Separate and shorter: failing to establish a connection at all (bad DNS,
+/// nothing listening) should not burn the full request budget.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Any failure talking to Jamf. Variants exist to separate "we are misconfigured"
+/// from "the upstream is unwell", which is what lets one error map to three
+/// different status codes -- see [`JamfError::status`].
+#[derive(Debug, thiserror::Error)]
+pub enum JamfError {
+    #[error("missing env var {0}")]
+    MissingEnv(String),
+
+    #[error("jamf auth request failed: {0}")]
+    Unreachable(#[source] reqwest::Error),
+
+    #[error("jamf auth rejected: {0}")]
+    AuthRejected(#[source] reqwest::Error),
+
+    #[error("jamf auth response invalid: {0}")]
+    AuthDecode(#[source] reqwest::Error),
+
+    #[error("GET {path} failed: {source}")]
+    Request {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("GET {path} returned error: {source}")]
+    Upstream {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("GET {path} response invalid: {source}")]
+    Decode {
+        path: String,
+        #[source]
+        source: reqwest::Error,
+    },
+}
+
+/// Kept so the signatures in this module read as before.
+pub type Error = JamfError;
+
+impl JamfError {
+    pub fn status(&self) -> StatusCode {
+        match self {
+            // Our own deployment is unconfigured -- nothing upstream went wrong.
+            Self::MissingEnv(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            // Never reached Jamf at all: DNS, connect, or timeout.
+            Self::Unreachable(_) | Self::Request { .. } => StatusCode::GATEWAY_TIMEOUT,
+            // Jamf answered, but not with something we can use.
+            Self::AuthRejected(_)
+            | Self::AuthDecode(_)
+            | Self::Upstream { .. }
+            | Self::Decode { .. } => StatusCode::BAD_GATEWAY,
+        }
+    }
+}
+
+impl IntoResponse for JamfError {
+    fn into_response(self) -> axum::response::Response {
+        // JSON on the failure path too, matching the success bodies.
+        (
+            self.status(),
+            Json(serde_json::json!({ "error": self.to_string() })),
+        )
+            .into_response()
+    }
+}
 
 const PAGE_SIZE: usize = 100;
 
@@ -63,10 +144,17 @@ impl JamfClient {
     /// Reads JAMF_BASE_URL / JAMF_USERNAME / JAMF_PASSWORD from the environment
     /// and trades basic auth for a bearer token.
     pub async fn from_env() -> Result<Self, Error> {
-        let var = |k: &str| std::env::var(k).map_err(|_| format!("missing env var {k}"));
+        let var = |k: &str| std::env::var(k).map_err(|_| JamfError::MissingEnv(k.to_string()));
         let base_url = var("JAMF_BASE_URL")?.trim_end_matches('/').to_string();
         let (username, password) = (var("JAMF_USERNAME")?, var("JAMF_PASSWORD")?);
-        let http = reqwest::Client::new();
+        // Only timeouts are configured here, so there is nothing for the
+        // builder to reject -- a failure would mean reqwest could not
+        // initialise TLS at all, which is a broken build, not a bad request.
+        let http = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .expect("reqwest client with only timeouts set must build");
 
         let auth: TokenResponse = http
             .post(format!("{base_url}/v1/auth/token"))
@@ -74,12 +162,12 @@ impl JamfClient {
             .basic_auth(username, Some(password))
             .send()
             .await
-            .map_err(|e| format!("jamf auth request failed: {e}"))?
+            .map_err(JamfError::Unreachable)?
             .error_for_status()
-            .map_err(|e| format!("jamf auth rejected: {e}"))?
+            .map_err(JamfError::AuthRejected)?
             .json()
             .await
-            .map_err(|e| format!("jamf auth response invalid: {e}"))?;
+            .map_err(JamfError::AuthDecode)?;
 
         Ok(Self {
             http,
@@ -95,12 +183,21 @@ impl JamfClient {
             .bearer_auth(&self.token)
             .send()
             .await
-            .map_err(|e| format!("GET {path} failed: {e}"))?
+            .map_err(|source| JamfError::Request {
+                path: path.to_string(),
+                source,
+            })?
             .error_for_status()
-            .map_err(|e| format!("GET {path} returned error: {e}"))?
+            .map_err(|source| JamfError::Upstream {
+                path: path.to_string(),
+                source,
+            })?
             .json()
             .await
-            .map_err(|e| format!("GET {path} response invalid: {e}"))
+            .map_err(|source| JamfError::Decode {
+                path: path.to_string(),
+                source,
+            })
     }
 
     /// Every computer carrying `sections`, following pages until `totalCount` is
@@ -178,8 +275,80 @@ pub fn is_latest(
 
 #[cfg(test)]
 mod tests {
-    use super::is_latest;
+    use super::{is_latest, JamfError};
+    use axum::http::StatusCode;
     use std::collections::HashMap;
+    use std::time::Duration;
+
+    /// `status()` matches on the variant alone, so every case can share one real
+    /// `reqwest::Error` -- there is no public constructor for a fake, and the
+    /// type is not `Clone`, so each case builds its own. Nothing listens on port
+    /// 1, so this stays offline; the tiny connect timeout keeps it from paying
+    /// the platform's connect backoff seven times over.
+    async fn err() -> reqwest::Error {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(1))
+            .build()
+            .unwrap()
+            .get("http://127.0.0.1:1")
+            .send()
+            .await
+            .expect_err("nothing listens on port 1")
+    }
+
+    /// One assert per variant on purpose: the grouping in `status()` is the
+    /// claim under test, so a new variant landing in the wrong arm should fail
+    /// here rather than be covered by a representative sibling.
+    #[tokio::test]
+    async fn status_is_chosen_by_whose_fault_it_is() {
+        let path = || "/v4/computers-inventory".to_string();
+
+        // Ours: unconfigured deployment, nothing upstream attempted.
+        assert_eq!(
+            JamfError::MissingEnv("JAMF_BASE_URL".into()).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // Never reached Jamf.
+        assert_eq!(
+            JamfError::Unreachable(err().await).status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            JamfError::Request {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+
+        // Jamf answered, but not usably.
+        assert_eq!(
+            JamfError::AuthRejected(err().await).status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::AuthDecode(err().await).status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::Upstream {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::Decode {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::BAD_GATEWAY
+        );
+    }
 
     /// Unsorted on purpose: `is_latest` must find the max, not the first or last.
     fn catalog() -> HashMap<String, Vec<String>> {

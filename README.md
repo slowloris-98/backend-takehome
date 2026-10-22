@@ -2,6 +2,8 @@
 
 A Jamf integration backend built with Axum.
 
+![Backend service system architecture](docs/sys_arch.png)
+
 ## Run
 
 Install Rust: https://www.rust-lang.org/learn/get-started
@@ -13,8 +15,9 @@ Jamf Pro credentials:
 cp .env.example .env
 ```
 
-`.env` needs `JAMF_BASE_URL`, `JAMF_USERNAME` and `JAMF_PASSWORD`; the account needs the
-"Read Computers" privilege. `.env` is gitignored and is loaded automatically at startup,
+`.env` needs `JAMF_BASE_URL`, `JAMF_USERNAME` and `JAMF_PASSWORD`. The account needs read
+access to both computer inventory and managed software updates, since `GET
+/api/jamf/devices` calls each. `.env` is gitignored and is loaded automatically at startup,
 so no exporting is needed. Real environment variables override it, which is how you would
 supply these in a container or CI.
 
@@ -25,7 +28,7 @@ cargo run
 The server listens on `0.0.0.0:3000`.
 
 > `GET /api/jamf/devices` calls the live Jamf Pro API and needs `.env` configured; it
-> returns `502` with `missing env var JAMF_BASE_URL` if it is not. `POST` to
+> returns `500` with `{"error": "missing env var JAMF_BASE_URL"}` if it is not. `POST` to
 > `/api/jamf/credentials` is still a stub that mirrors back whatever you send.
 
 ## Routes
@@ -93,12 +96,23 @@ from `false` ("genuinely behind"), so counting out-of-date devices does not sile
 devices Jamf never reported an OS for. The key is always present. Other fields Jamf leaves
 out come back as empty strings, which is why an unknown device shows `os: ""`.
 
-Any failure reaching Jamf (missing config, rejected credentials, an API error) returns `502`
-with the underlying message as the body:
+Failures return a JSON body of `{"error": "<message>"}`, with the status chosen by
+whose fault the failure is:
 
+| Status | When | Example message |
+|---|---|---|
+| `500` | a `JAMF_*` env var is missing -- this server is misconfigured | `missing env var JAMF_BASE_URL` |
+| `504` | Jamf could not be reached at all (DNS, connect, timeout) | `jamf auth request failed: ... dns error` |
+| `502` | Jamf answered, but unusably: rejected credentials, a non-2xx, or a body that would not parse | `jamf auth rejected: HTTP status client error (401 Unauthorized)` |
+
+```json
+{ "error": "missing env var JAMF_BASE_URL" }
 ```
-missing env var JAMF_BASE_URL
-```
+
+Each Jamf call is bounded: 5s to connect, 10s in total. `reqwest` applies no timeout by
+default, so an unresponsive Jamf would otherwise hang the request indefinitely rather than
+surfacing as the `504` above. The bound is per request, not per handler — the paginated
+inventory pass can spend it on each page.
 
 ### `POST /api/jamf/credentials`
 
@@ -142,21 +156,24 @@ Credentials belong in `.env` (gitignored) — never commit them.
 ## Tests
 
 ```bash
-cargo test --bin backend-takehome   # version-comparison unit tests, no server needed
-cargo test -- --nocapture           # everything, incl. the round-trip timing line
+cargo test                                    # unit tests only; integration tests report as ignored
+cargo test -- --ignored --nocapture           # integration tests, incl. the round-trip timing line
 ```
 
-Coverage is deliberately narrow: the `os_is_latest` comparison (older / equal / newer
-than the newest version Jamf lists, plus the unknown cases that yield `null`) and the
-shape of `GET /api/jamf/devices`. `POST /api/jamf/credentials` is a pure mirror and is
-not tested.
+The unit tests need no server: the `os_is_latest` comparison (older / equal / newer than
+the newest version Jamf lists, plus the unknown cases that yield `null`) and the
+flattening of an inventory row into a `Device` (every absent section, and the trim that
+keeps `os` from being `" "`). `POST /api/jamf/credentials` is a pure mirror and is not
+tested.
 
 The tests in [tests/devices.rs](tests/devices.rs) hit a **running** server and real Jamf
-data, so start `cargo run` in another terminal with a valid `.env` first. With nothing
-listening on port 3000 they print a skip notice and pass, so read the output rather than
-trusting the exit code alone. They assert only the response shape — status, the five
-fields and their types (`os_is_latest` being bool or `null`), and the `device_id` ordering —
-never specific device names, so they survive inventory changes.
+data, so they are `#[ignore]`d and a plain `cargo test` reports them as ignored — never as
+passed, which is what a skip-and-return would have done without having tested anything.
+To run them, start `cargo run` in another terminal with a valid `.env`, then opt in with
+`cargo test -- --ignored`; with nothing listening they now fail rather than skip. They
+assert only the response shape — status, the five fields and their types (`os_is_latest`
+being bool or `null`), and the `device_id` ordering — never specific device names, so they
+survive inventory changes.
 
 On Windows a server started with `cargo run` holds a lock on
 `target/debug/backend-takehome.exe`, and `cargo test` fails with `Access is denied
@@ -164,5 +181,5 @@ On Windows a server started with `cargo run` holds a lock on
 started one, or build the tests elsewhere:
 
 ```bash
-CARGO_TARGET_DIR=target/test cargo test -- --nocapture
+CARGO_TARGET_DIR=target/test cargo test -- --ignored --nocapture
 ```

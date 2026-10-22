@@ -1,5 +1,9 @@
 # backend-takehome
 
+> **This is the original starter README, kept for reference.** The `GET /` hello-world route
+> it describes was replaced by the two assignment routes, so the `curl` below no longer
+> applies — see [README.md](README.md) for how to configure and run the submission.
+
 Install rust: https://www.rust-lang.org/learn/get-started
 
 To run the project, after installing rust, run 

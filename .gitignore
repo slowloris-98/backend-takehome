@@ -7,8 +7,6 @@
 
 .claude/
 
-/notes.txt
-/decisions.txt
-/known_issues.txt
+/docs/notes.txt
 
 /test_json/
