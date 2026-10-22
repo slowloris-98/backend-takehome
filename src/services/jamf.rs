@@ -77,9 +77,16 @@ impl JamfError {
 
 impl IntoResponse for JamfError {
     fn into_response(self) -> axum::response::Response {
+        // The only server-side record that a request failed. The client gets
+        // Display; the log gets Debug, which names the variant and carries the
+        // #[source] reqwest error -- i.e. which of the four 502 causes it was.
+        // Bound first: the tuple below moves self.
+        let status = self.status();
+        tracing::error!(%status, error = ?self, "request failed");
+
         // JSON on the failure path too, matching the success bodies.
         (
-            self.status(),
+            status,
             Json(serde_json::json!({ "error": self.to_string() })),
         )
             .into_response()

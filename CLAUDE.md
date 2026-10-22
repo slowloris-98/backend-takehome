@@ -65,14 +65,27 @@ only concurrency — no `Arc`, no `JoinSet`, and no final sort, because nothing 
 reorders. Jamf's `id:asc` ordering survives to the response -- `id` is the sort key because
 it is immutable, so an offset page window cannot skip or duplicate a device renamed mid-pass.
 
+Logging has exactly two sites, and new code should not add a third casually.
+`main()` installs the `tracing_subscriber` fmt subscriber (stdout) after
+`dotenv()` -- that order is what lets `RUST_LOG` live in `.env` -- and puts
+`TraceLayer` on the `Router` for per-request method/path/status/latency.
+`JamfError`'s `IntoResponse` logs the failure itself. Note the default filter
+uses `tower_http=debug`, not `info`: `TraceLayer` logs successful requests at
+DEBUG and only failures at ERROR, so at `info` a 200 logs nothing and the
+latency is invisible until something breaks. The env filter target is
+`backend_takehome` with an underscore -- the hyphenated crate name silently
+matches nothing. No handler or `JamfClient` method is `#[instrument]`ed yet; if
+you add it, `skip_all` on anything touching `from_env`, since `#[instrument]`
+records arguments with `Debug` by default and would otherwise log the password.
+
 Each handler returns its own top-level struct (e.g. `{"devices":[...]}`); responses are not wrapped in a shared `data` envelope.
 
-There is no `lib.rs` and no shared app state: `get_devices` builds a fresh `JamfClient` (and so a fresh token) per request. If that becomes a cost, introduce an `AppState` via `Router::with_state` deliberately rather than reaching for globals. Errors are a typed `JamfError` enum (`thiserror`, still aliased `services::jamf::Error`); its `status()` method is the single place a status code is chosen -- `500` for a missing env var, `504` for never reaching Jamf, `502` for a Jamf response we cannot use -- and its `IntoResponse` renders `{"error": "..."}`, so handlers return `Result<Json<T>, JamfError>` and do no mapping of their own.
+There is no `lib.rs` and no shared app state: `get_devices` builds a fresh `JamfClient` (and so a fresh token) per request. If that becomes a cost, introduce an `AppState` via `Router::with_state` deliberately rather than reaching for globals. Errors are a typed `JamfError` enum (`thiserror`, still aliased `services::jamf::Error`); its `status()` method is the single place a status code is chosen -- `500` for a missing env var, `504` for never reaching Jamf, `502` for a Jamf response we cannot use -- and its `IntoResponse` renders `{"error": "..."}` *and* emits the one `tracing::error!` for the failure, so handlers return `Result<Json<T>, JamfError>` and do no mapping or logging of their own.
 
 ## Conventions and gotchas
 
 - **Axum 0.6**, not 0.7+. Server startup uses `axum::Server::bind(...).serve(...)`, not `axum::serve` with a `TcpListener`. Handler extractor/state APIs also differ from 0.7 — check the 0.6 docs before copying examples from the web.
-- Dependencies are pre-declared in [Cargo.toml](Cargo.toml) for the intended scope of the exercise. In use: `reqwest` (calling Jamf), `version-compare` (`is_latest`), `thiserror` (`JamfError`), `dotenv`, `serde`/`serde_json`, `tokio`. Declared but not yet used: `chrono`, `tower-http` with `cors`, `http`. Prefer these over adding new crates.
+- Dependencies are pre-declared in [Cargo.toml](Cargo.toml) for the intended scope of the exercise. In use: `reqwest` (calling Jamf), `version-compare` (`is_latest`), `thiserror` (`JamfError`), `dotenv`, `serde`/`serde_json`, `tokio`, `tower-http` with `trace` (`TraceLayer`), `tracing`/`tracing-subscriber`. Declared but not yet used: `chrono`, `tower-http`'s `cors`, `http`. Prefer these over adding new crates.
 - `JAMF_BASE_URL` includes the `/api` suffix — `JamfClient` paths start at the version segment (`/v1/...`, `/v4/...`), so they are appended directly. A trailing slash on the env var is trimmed.
 - `is_latest` returns `Option<bool>`: `Some(true)`/`Some(false)` when the versions compare, `None` when they cannot — empty OS name or version, an OS absent from the update catalog, an empty candidate list, or a version string `version-compare` cannot parse. `None` serializes as JSON `null` on `os_is_latest`, which deliberately distinguishes "unknown" from `false` ("behind"). Keep the function total — it never panics over whatever strings Jamf returns.
 - **The two `compare_to` call sites in `is_latest` are not symmetric, on purpose.** The outer one (`version` vs `newest`) is the caller's actual question, so it ends in `.ok()` and a parse failure becomes `None`. The inner one, inside the `reduce` that picks the catalog maximum, ranks Jamf's own entries against each other and keeps `.unwrap_or(false)`: one malformed entry in Jamf's list must lose the reduce, not blank out every device on that OS. A unit test pins this — do not "fix" it into `None`.
