@@ -67,7 +67,7 @@ Sorting was never a stated requirement, so the endpoint imposes no collation of 
 
 ## 7. POST /credentials is a mirror
 
-It neither validates against Jamf nor feeds `JamfClient`, which the spec allows explicitly since persistence was optional.
+It neither validates against Jamf nor feeds `JamfClient`, which the spec allows explicitly since persistence was optional. Also if implemented, we would not be echoing the password back.
 
 ## Other decisions
 

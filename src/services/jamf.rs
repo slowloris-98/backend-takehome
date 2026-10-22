@@ -1,7 +1,21 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use version_compare::{compare_to, Cmp};
+
+/// Ceiling on a *single* Jamf HTTP call, start to finish. Not configurable on
+/// purpose: unlike the base URL and credentials, this does not vary per
+/// deployment, so it stays a constant rather than another env var.
+///
+/// Note this bounds one request, not one handler -- `inventory_full()`
+/// paginates, so a slow Jamf can still cost this much per page. Bounding the
+/// endpoint as a whole would need a server-level timeout layer.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Separate and shorter: failing to establish a connection at all (bad DNS,
+/// nothing listening) should not burn the full request budget.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Any failure talking to Jamf. Variants exist to separate "we are misconfigured"
 /// from "the upstream is unwell", which is what lets one error map to three
@@ -133,7 +147,14 @@ impl JamfClient {
         let var = |k: &str| std::env::var(k).map_err(|_| JamfError::MissingEnv(k.to_string()));
         let base_url = var("JAMF_BASE_URL")?.trim_end_matches('/').to_string();
         let (username, password) = (var("JAMF_USERNAME")?, var("JAMF_PASSWORD")?);
-        let http = reqwest::Client::new();
+        // Only timeouts are configured here, so there is nothing for the
+        // builder to reject -- a failure would mean reqwest could not
+        // initialise TLS at all, which is a broken build, not a bad request.
+        let http = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .expect("reqwest client with only timeouts set must build");
 
         let auth: TokenResponse = http
             .post(format!("{base_url}/v1/auth/token"))
