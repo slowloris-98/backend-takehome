@@ -1,30 +1,26 @@
 //! Integration tests for `GET /api/jamf/devices`.
 //!
 //! These expect a server already running on localhost:3000 (`cargo run`) with a
-//! valid `.env`. With nothing listening they report a skip rather than failing,
-//! so `cargo test` stays useful without the server.
+//! valid `.env`, so they are `#[ignore]`d: a plain `cargo test` reports them as
+//! ignored rather than passing without having tested anything. Opt in with
+//! `cargo test -- --ignored`, where a missing server is a failure, not a skip.
 
 use std::time::Instant;
 
 const URL: &str = "http://localhost:3000/api/jamf/devices";
 
-/// `None` when nothing is listening, so the test can skip with a clear message
-/// instead of an opaque connection error.
-async fn fetch() -> Option<reqwest::Response> {
-    match reqwest::get(URL).await {
-        Ok(response) => Some(response),
-        Err(e) => {
-            eprintln!("SKIP: no server on localhost:3000 ({e}) -- run `cargo run` first");
-            None
-        }
-    }
+/// Panics with a pointed message rather than an opaque connection error, since
+/// an opted-in run with no server is a failure.
+async fn fetch() -> reqwest::Response {
+    reqwest::get(URL)
+        .await
+        .expect("no server on localhost:3000 -- run `cargo run` first")
 }
 
 #[tokio::test]
+#[ignore = "needs a server on localhost:3000 with a valid .env"]
 async fn devices_returns_well_formed_payload() {
-    let Some(response) = fetch().await else {
-        return;
-    };
+    let response = fetch().await;
     assert_eq!(response.status(), 200, "expected 200 from {URL}");
 
     let body: serde_json::Value = response.json().await.expect("response was not JSON");
@@ -84,11 +80,10 @@ async fn devices_returns_well_formed_payload() {
 }
 
 #[tokio::test]
+#[ignore = "needs a server on localhost:3000 with a valid .env"]
 async fn devices_round_trip_timing() {
     let started = Instant::now();
-    let Some(response) = fetch().await else {
-        return;
-    };
+    let response = fetch().await;
     let status = response.status();
     let body = response.bytes().await.expect("failed to read body");
     let elapsed = started.elapsed();

@@ -19,18 +19,20 @@ cargo build                # compile
 cargo check                # fast type-check, no codegen
 cargo clippy               # lint
 cargo fmt                  # format
-cargo test                 # run all tests
+cargo test                 # unit tests (integration tests report as ignored)
+cargo test -- --ignored    # integration tests; needs a running server
 cargo test <name>          # run tests matching <name>
 cargo test <name> -- --exact --nocapture   # run one test, show println output
 ```
 
 Smoke check: `curl http://localhost:3000/api/jamf/devices`
 
-`cargo test --bin backend-takehome` runs the `is_latest` unit tests alone; the `tests/devices.rs`
-integration tests need a server already running on port 3000 with a valid `.env` (see README).
-With nothing listening they print a `SKIP:` notice and pass, so read the output rather than
-trusting the exit code. A running `cargo run` locks the binary on Windows (`Access is denied
-(os error 5)` on relink), so use `CARGO_TARGET_DIR=target/test` to test alongside it.
+`cargo test` runs the unit tests (`is_latest` in `services::jamf`, `to_device` in
+`routes::devices`); the `tests/devices.rs` integration tests need a server already running
+on port 3000 with a valid `.env` (see README), so they are `#[ignore]`d and show as ignored
+rather than passing vacuously. Opt in with `cargo test -- --ignored`, where a missing server
+fails instead of skipping. A running `cargo run` locks the binary on Windows (`Access is
+denied (os error 5)` on relink), so use `CARGO_TARGET_DIR=target/test` to test alongside it.
 
 ## Architecture
 
