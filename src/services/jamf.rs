@@ -275,8 +275,80 @@ pub fn is_latest(
 
 #[cfg(test)]
 mod tests {
-    use super::is_latest;
+    use super::{is_latest, JamfError};
+    use axum::http::StatusCode;
     use std::collections::HashMap;
+    use std::time::Duration;
+
+    /// `status()` matches on the variant alone, so every case can share one real
+    /// `reqwest::Error` -- there is no public constructor for a fake, and the
+    /// type is not `Clone`, so each case builds its own. Nothing listens on port
+    /// 1, so this stays offline; the tiny connect timeout keeps it from paying
+    /// the platform's connect backoff seven times over.
+    async fn err() -> reqwest::Error {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(1))
+            .build()
+            .unwrap()
+            .get("http://127.0.0.1:1")
+            .send()
+            .await
+            .expect_err("nothing listens on port 1")
+    }
+
+    /// One assert per variant on purpose: the grouping in `status()` is the
+    /// claim under test, so a new variant landing in the wrong arm should fail
+    /// here rather than be covered by a representative sibling.
+    #[tokio::test]
+    async fn status_is_chosen_by_whose_fault_it_is() {
+        let path = || "/v4/computers-inventory".to_string();
+
+        // Ours: unconfigured deployment, nothing upstream attempted.
+        assert_eq!(
+            JamfError::MissingEnv("JAMF_BASE_URL".into()).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // Never reached Jamf.
+        assert_eq!(
+            JamfError::Unreachable(err().await).status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            JamfError::Request {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+
+        // Jamf answered, but not usably.
+        assert_eq!(
+            JamfError::AuthRejected(err().await).status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::AuthDecode(err().await).status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::Upstream {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            JamfError::Decode {
+                path: path(),
+                source: err().await
+            }
+            .status(),
+            StatusCode::BAD_GATEWAY
+        );
+    }
 
     /// Unsorted on purpose: `is_latest` must find the max, not the first or last.
     fn catalog() -> HashMap<String, Vec<String>> {
