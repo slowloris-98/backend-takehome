@@ -27,6 +27,14 @@ cargo run
 
 The server listens on `0.0.0.0:3000`.
 
+Logs go to stdout: one line per request with its latency, and one per failure naming
+the error variant. Set `RUST_LOG` to change what is shown -- it reads from `.env` too.
+
+```bash
+RUST_LOG=error cargo run        # failures only
+RUST_LOG=debug cargo run        # everything, including dependencies
+```
+
 > `GET /api/jamf/devices` calls the live Jamf Pro API and needs `.env` configured; it
 > returns `500` with `{"error": "missing env var JAMF_BASE_URL"}` if it is not. `POST` to
 > `/api/jamf/credentials` is still a stub that mirrors back whatever you send.
