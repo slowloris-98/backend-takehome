@@ -107,11 +107,11 @@ out come back as empty strings, which is why an unknown device shows `os: ""`.
 Failures return a JSON body of `{"error": "<message>"}`, with the status chosen by
 whose fault the failure is:
 
-| Status | When | Example message |
-|---|---|---|
-| `500` | a `JAMF_*` env var is missing -- this server is misconfigured | `missing env var JAMF_BASE_URL` |
-| `504` | Jamf could not be reached at all (DNS, connect, timeout) | `jamf auth request failed: ... dns error` |
-| `502` | Jamf answered, but unusably: rejected credentials, a non-2xx, or a body that would not parse | `jamf auth rejected: HTTP status client error (401 Unauthorized)` |
+| Code | Why | When | Example message |
+|---|---|---|---|
+| `500` | Internal Server Error | a `JAMF_*` env var is missing -- this server is misconfigured | `missing env var JAMF_BASE_URL` |
+| `504` | Gateway Timeout | Jamf could not be reached at all (DNS, connect, timeout) | `jamf auth request failed: ... dns error` |
+| `502` | Bad Gateway | Jamf answered, but unusably: rejected credentials, a non-2xx, or a body that would not parse | `jamf auth rejected: HTTP status client error (401 Unauthorized)` |
 
 ```json
 { "error": "missing env var JAMF_BASE_URL" }
