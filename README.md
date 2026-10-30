@@ -164,8 +164,8 @@ Credentials belong in `.env` (gitignored) — never commit them.
 ## Tests
 
 ```bash
-cargo test                                    # unit tests only; integration tests report as ignored
-cargo test -- --ignored --nocapture           # integration tests, incl. the round-trip timing line
+cargo test                         # unit and integration tests
+cargo test -- --nocapture           # same tests, with the round-trip timing line visible
 ```
 
 The unit tests need no server: the `os_is_latest` comparison (older / equal / newer than
@@ -175,11 +175,9 @@ keeps `os` from being `" "`). `POST /api/jamf/credentials` is a pure mirror and 
 tested.
 
 The tests in [tests/devices.rs](tests/devices.rs) hit a **running** server and real Jamf
-data, so they are `#[ignore]`d and a plain `cargo test` reports them as ignored — never as
-passed, which is what a skip-and-return would have done without having tested anything.
-To run them, start `cargo run` in another terminal with a valid `.env`, then opt in with
-`cargo test -- --ignored`; with nothing listening they now fail rather than skip. They
-assert only the response shape — status, the five fields and their types (`os_is_latest`
+data. They run as part of `cargo test`, so start `cargo run` in another terminal with a
+valid `.env` before running the test suite. Without a server, the integration tests fail.
+They assert only the response shape — status, the five fields and their types (`os_is_latest`
 being bool or `null`), and the `device_id` ordering — never specific device names, so they
 survive inventory changes.
 
@@ -188,6 +186,7 @@ On Windows a server started with `cargo run` holds a lock on
 (os error 5)` when it tries to relink. Either stop the server and use a separately
 started one, or build the tests elsewhere:
 
-```bash
-CARGO_TARGET_DIR=target/test cargo test -- --ignored --nocapture
+```powershell
+$env:CARGO_TARGET_DIR = "target/test"
+cargo test -- --nocapture
 ```
