@@ -18,7 +18,7 @@ async fn fetch() -> reqwest::Response {
 }
 
 #[tokio::test]
-#[ignore = "needs a server on localhost:3000 with a valid .env"]
+//#[ignore = "needs a server on localhost:3000 with a valid .env"]
 async fn devices_returns_well_formed_payload() {
     let response = fetch().await;
     assert_eq!(response.status(), 200, "expected 200 from {URL}");
@@ -80,7 +80,7 @@ async fn devices_returns_well_formed_payload() {
 }
 
 #[tokio::test]
-#[ignore = "needs a server on localhost:3000 with a valid .env"]
+//#[ignore = "needs a server on localhost:3000 with a valid .env"]
 async fn devices_round_trip_timing() {
     let started = Instant::now();
     let response = fetch().await;
